@@ -13,6 +13,10 @@ name = "readability"
 scraper = "0.22"
 ego-tree = "0.10"
 
+# HTML/DOM internals (QualName, LocalName, StrTendril — used in DOM mutation)
+html5ever = "0.29"
+markup5ever = "0.14"
+
 # Regex (RE2-compatible, linear time — same engine family as go-readability's re2go patterns)
 regex = "1"
 

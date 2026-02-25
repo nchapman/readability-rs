@@ -845,6 +845,8 @@ dependencies = [
  "criterion",
  "dateparser",
  "ego-tree",
+ "html5ever",
+ "markup5ever",
  "pretty_assertions",
  "regex",
  "scraper",
