@@ -1792,7 +1792,6 @@ impl Parser {
                 false,
                 0.0,
                 &mut dummy_link_acc,
-                false,
                 &is_video_fn,
             );
         }
@@ -2154,17 +2153,18 @@ impl Parser {
                             }
                         } else if p.is_some() {
                             // Trim trailing whitespace from p, then close it.
+                            // Port of Go: if p has a next element sibling, move the
+                            // whitespace node to after p rather than removing it entirely.
+                            // This prevents missing space characters in article.text_content.
                             if let Some(p_id) = p {
                                 loop {
                                     let last = last_child_node(&self.doc, p_id);
                                     match last {
                                         Some(l) if self.is_whitespace(l) => {
-                                            // Check if p has a next element sibling.
-                                            let next_sib =
-                                                self.doc.next_element_sibling(p_id);
-                                            if next_sib.is_some() {
-                                                // Move whitespace after p (Go compat).
+                                            if let Some(next_elem) = self.doc.next_element_sibling(p_id) {
+                                                // Detach from p and reinsert before next sibling.
                                                 self.doc.remove(l);
+                                                self.doc.insert_before(next_elem, l);
                                             } else {
                                                 self.doc.remove(l);
                                             }
@@ -2611,7 +2611,6 @@ fn walk_cond(
     in_heading: bool,
     link_coeff: f64,
     link_acc: &mut CharCounter,
-    in_figcaption: bool,
     is_video_fn: &dyn Fn(NodeId) -> bool,
 ) {
     match doc.html.tree.get(n).map(|x| x.value()) {
@@ -2702,47 +2701,29 @@ fn walk_cond(
                 stats.text_chars.reset_context();
             }
 
-            let new_in_figcaption = in_figcaption || tag == "figcaption";
-
-            if tag == "a" && !in_figcaption {
+            if tag == "a" {
                 // Each <a> gets its own fresh link counter (port of Go's per-a cc).
-                let coeff = {
+                // Mirror Go: coefficient is 0 when the <a>'s DIRECT parent is a figcaption.
+                let parent_tag = doc.parent(n).map(|p| doc.tag_name(p)).unwrap_or("");
+                let coeff = if parent_tag != "figcaption" {
                     let href = doc.attr(n, "href").unwrap_or("").trim().to_string();
-                    if href.len() > 1 && href.starts_with('#') {
-                        0.3
-                    } else {
-                        1.0
-                    }
+                    if href.len() > 1 && href.starts_with('#') { 0.3 } else { 1.0 }
+                } else {
+                    0.0
                 };
                 let mut my_acc = CharCounter::new();
                 for child in doc.child_nodes(n) {
                     walk_cond(
-                        doc,
-                        child,
-                        stats,
-                        new_in_text,
-                        new_in_list,
-                        new_in_heading,
-                        coeff,
-                        &mut my_acc,
-                        new_in_figcaption,
-                        is_video_fn,
+                        doc, child, stats, new_in_text, new_in_list, new_in_heading,
+                        coeff, &mut my_acc, is_video_fn,
                     );
                 }
                 stats.link_chars_weighted += my_acc.total() as f64 * coeff;
             } else {
                 for child in doc.child_nodes(n) {
                     walk_cond(
-                        doc,
-                        child,
-                        stats,
-                        new_in_text,
-                        new_in_list,
-                        new_in_heading,
-                        link_coeff,
-                        link_acc,
-                        new_in_figcaption,
-                        is_video_fn,
+                        doc, child, stats, new_in_text, new_in_list, new_in_heading,
+                        link_coeff, link_acc, is_video_fn,
                     );
                 }
             }
@@ -3101,5 +3082,27 @@ mod tests {
         assert_eq!(article.title, "Test Article");
         assert_eq!(article.excerpt, "A test description");
         assert_eq!(article.site_name, "Test Site");
+    }
+
+    #[test]
+    fn grab_article_extracts_content() {
+        // A realistic article with enough text to exceed the 500-char threshold.
+        let body = "The quick brown fox jumps over the lazy dog. ".repeat(15);
+        let html = format!(
+            r#"<html><head><title>Test</title></head>
+            <body>
+              <nav class="menu">Navigation links here and there and everywhere</nav>
+              <article>
+                <h1>Article Heading</h1>
+                <p>{body}</p>
+                <p>{body}</p>
+              </article>
+              <footer>Footer content</footer>
+            </body></html>"#,
+        );
+        let mut p = make_parser();
+        let article = p.parse(&html, None).unwrap();
+        assert!(article.length > 0, "grab_article should produce content, got length=0");
+        assert!(article.content.contains("quick brown fox"), "content should include article text");
     }
 }
