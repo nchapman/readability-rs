@@ -1837,13 +1837,12 @@ impl Parser {
 
     /// Port of `clean` — remove all elements with `tag` unless they are video embeds.
     fn clean(&mut self, root: NodeId, tag: &str) {
+        // Evaluate the filter at removal time (children before parents) so that
+        // is_video_embed on an <object> sees its live innerHTML after inner embeds
+        // have already been removed.
         let nodes = self.doc.get_elements_by_tag_name(root, tag);
-        let to_remove: Vec<NodeId> = nodes
-            .into_iter()
-            .filter(|&id| !self.is_video_embed(id))
-            .collect();
-        for id in to_remove.into_iter().rev() {
-            if self.doc.parent(id).is_some() {
+        for &id in nodes.iter().rev() {
+            if self.doc.parent(id).is_some() && !self.is_video_embed(id) {
                 self.doc.remove(id);
             }
         }
@@ -1852,12 +1851,8 @@ impl Parser {
     /// Port of `cleanHeaders` — remove h1/h2 with negative class weight.
     fn clean_headers(&mut self, root: NodeId) {
         let nodes = self.doc.get_all_nodes_with_tag(root, &["h1", "h2"]);
-        let to_remove: Vec<NodeId> = nodes
-            .into_iter()
-            .filter(|&id| self.get_class_weight(id) < 0)
-            .collect();
-        for id in to_remove.into_iter().rev() {
-            if self.doc.parent(id).is_some() {
+        for &id in nodes.iter().rev() {
+            if self.doc.parent(id).is_some() && self.get_class_weight(id) < 0 {
                 self.doc.remove(id);
             }
         }
@@ -1868,25 +1863,13 @@ impl Parser {
         if !self.flags.clean_conditionally {
             return;
         }
-        if tag == "div" {
-            // Check for caption-credit in the full tree
-            let all = self.doc.get_elements_by_tag_name(root, "*");
-            for &n in &all {
-                let cls = self.doc.attr(n, "class").unwrap_or("").to_string();
-                if cls.contains("caption-credit") {
-                    let t = self.doc.tag_name(n);
-                    eprintln!("[DEBUG clean_conditionally] caption-credit element has tag={t:?} class={cls:?}");
-                }
-            }
-        }
+        // Port of Go's removeNodes with a filter: iterate in reverse order (children before
+        // parents) so that when we evaluate a parent, its already-removed children don't
+        // inflate the link density and cause the parent to be incorrectly removed.
         let nodes = self.doc.get_elements_by_tag_name(root, tag);
-        let to_remove: Vec<NodeId> = nodes
-            .into_iter()
-            .filter(|&node| self.should_clean_conditionally(node, tag))
-            .collect();
-        for id in to_remove.into_iter().rev() {
-            if self.doc.parent(id).is_some() {
-                self.doc.remove(id);
+        for &node in nodes.iter().rev() {
+            if self.doc.parent(node).is_some() && self.should_clean_conditionally(node, tag) {
+                self.doc.remove(node);
             }
         }
     }
@@ -2348,14 +2331,6 @@ impl Parser {
                         node = self.get_next_node(new_node, false);
                         continue;
                     } else if !self.has_child_block_element(n) {
-                        let cls = self.doc.attr(n, "class").unwrap_or("").to_string();
-                        if cls.contains("caption") {
-                            eprintln!("[DEBUG] renaming to p: class={cls:?} has_child_block={}", self.has_child_block_element(n));
-                            for child in self.doc.child_nodes(n) {
-                                let tag = self.doc.tag_name(child);
-                                eprintln!("[DEBUG]   child: tag={tag}");
-                            }
-                        }
                         self.set_node_tag(n, "p");
                         elements_to_score.push(n);
                     }
@@ -3103,6 +3078,19 @@ mod tests {
     fn text_similarity_disjoint_is_zero() {
         let p = make_parser();
         assert!((p.text_similarity("foo bar", "baz qux")).abs() < 1e-9);
+    }
+
+    #[test]
+    fn text_similarity_cjk_treated_as_delimiter() {
+        // Go RE2 \W is ASCII-only, so Chinese characters act as token delimiters.
+        // "hello" appears in both strings; the Chinese characters are delimiters.
+        // Similarity should be 1.0 since all tokens of b ("hello") are in a.
+        let p = make_parser();
+        let sim = p.text_similarity("hello新电脑_suffix", "hello新电脑");
+        assert!(
+            sim > 0.75,
+            "expected similarity > 0.75 for CJK-delimited strings, got {sim}"
+        );
     }
 
     // ── get_article_title ──────────────────────────────────────────────────

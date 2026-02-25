@@ -59,8 +59,12 @@ pub static RX_VIDEOS: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)//(www\.)?((dailymotion|youtube|youtube-nocookie|player\.vimeo|v\.qq|bilibili|live\.bilibili)\.com|(archive|upload\.wikimedia)\.org|player\.twitch\.tv)").unwrap()
 });
 
+// Port of Go RE2 textSimilarity tokenizer: Go's RE2 \W is ASCII-only ([^a-zA-Z0-9_]),
+// so non-ASCII characters (e.g. Chinese) are treated as word delimiters. Mirror that
+// behavior with an explicit ASCII-only negated class so split points are at valid
+// Unicode codepoint boundaries (unlike (?-u)\W+ which splits at bytes).
 pub static RX_TOKENIZE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)\W+").unwrap());
+    LazyLock::new(|| Regex::new(r"[^a-zA-Z0-9_]+").unwrap());
 
 pub static RX_HAS_CONTENT: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)\S$").unwrap());
