@@ -113,14 +113,17 @@ impl Document {
             if let Node::Element(ref mut el) = *node.value() {
                 let qual = QualName::new(None, ns!(), LocalName::from(name));
                 let tendril: scraper::StrTendril = value.into();
-                // Update existing attr or push new one
+                // Update existing attr in place (linear scan to match iter_mut).
                 for (k, v) in el.attrs.iter_mut() {
                     if k.local.as_ref() == name {
                         *v = tendril;
                         return;
                     }
                 }
-                el.attrs.push((qual, tendril));
+                // New attribute: insert in sorted order so that scraper's
+                // binary-search-based `Element::attr()` can find it.
+                let pos = el.attrs.partition_point(|(k, _)| k < &qual);
+                el.attrs.insert(pos, (qual, tendril));
             }
         }
     }
@@ -648,6 +651,25 @@ mod tests {
         let all = d.get_elements_by_tag_name(body, "*");
         // div + p + span = 3
         assert_eq!(all.len(), 3);
+    }
+
+    #[test]
+    fn ars1_caption_credit_tag() {
+        let src = std::fs::read_to_string(
+            "/Users/nchapman/Drive/Code/lessisbetter/readability-rs/test-pages/ars-1/source.html"
+        ).unwrap();
+        let d = Document::parse(&src);
+        let all = d.get_elements_by_tag_name(d.root(), "*");
+        for &n in &all {
+            let cls = d.attr(n, "class").unwrap_or("").to_string();
+            if cls.contains("caption") {
+                eprintln!("  tag={} class={:?}", d.tag_name(n), cls);
+                // Also print parent's tag
+                if let Some(parent) = d.parent(n) {
+                    eprintln!("    parent: tag={}", d.tag_name(parent));
+                }
+            }
+        }
     }
 
     #[test]

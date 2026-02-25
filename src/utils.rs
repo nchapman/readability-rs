@@ -75,7 +75,16 @@ pub fn to_absolute_uri(uri: &str, base: &Url) -> String {
     }
 
     // Resolve relative path against base.
-    match base.join(uri) {
+    // Percent-encode characters that the `url` crate would silently strip or
+    // reject (e.g. space → `%20`, `|` → `%7C`), matching Go's url.Parse
+    // behaviour which preserves them and lets ResolveReference encode them.
+    let needs_encoding = uri.contains(' ') || uri.contains('|');
+    let encoded: std::borrow::Cow<str> = if needs_encoding {
+        uri.replace(' ', "%20").replace('|', "%7C").into()
+    } else {
+        uri.into()
+    };
+    match base.join(&encoded) {
         Ok(resolved) => resolved.to_string(),
         Err(_) => uri.to_string(),
     }
@@ -203,6 +212,20 @@ mod tests {
                 "to_absolute_uri({uri:?})"
             );
         }
+    }
+
+    #[test]
+    fn to_absolute_uri_space_in_url() {
+        let base = Url::parse("http://fakehost/test/page.html").unwrap();
+        let result = to_absolute_uri("hmhome.gif ", &base);
+        println!("space url result: {result:?}");
+        // trailing space should be preserved as %20
+        assert_eq!(result, "http://fakehost/test/hmhome.gif%20");
+
+        let base2 = Url::parse("http://fakehost/test/page.html").unwrap();
+        let pipe_url = "file:///C|/Documents%20and%20Settings/file.gif";
+        let r2 = to_absolute_uri(pipe_url, &base2);
+        println!("C| file url result: {r2:?}");
     }
 
     #[test]

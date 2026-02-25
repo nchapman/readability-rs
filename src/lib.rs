@@ -11,3 +11,4 @@ pub mod traverse;
 pub mod utils;
 
 pub use article::Article;
+pub use parser::Parser;

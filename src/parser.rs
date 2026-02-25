@@ -147,6 +147,103 @@ impl Parser {
         self.parse_and_mutate(doc, page_url)
     }
 
+    /// Convenience wrapper: parse `html` and check readability without a pre-parsed Document.
+    ///
+    /// Equivalent to `CheckDocument(html.Parse(html))` in Go tests.
+    pub fn check_html(&self, html: &str) -> bool {
+        let doc = Document::parse(html);
+        self.check_document(&doc)
+    }
+
+    /// Port of `CheckDocument` — returns true if the document is likely a readable article.
+    ///
+    /// Checks without running the full extraction pipeline.
+    pub fn check_document(&self, doc: &Document) -> bool {
+        // Get <p>, <pre>, and <article> nodes.
+        let root = doc.root();
+        let mut nodes = doc.query_selector_all(root, "p, pre, article");
+
+        // Also collect unique parent <div> elements that contain <br> children.
+        // These match the `div > br` pattern and indicate text-heavy divs.
+        let br_parents = doc.query_selector_all(root, "div > br");
+        let mut seen = std::collections::HashSet::new();
+        for br in br_parents {
+            if let Some(parent) = doc.parent(br) {
+                if seen.insert(parent) {
+                    nodes.push(parent);
+                }
+            }
+        }
+
+        // Walk nodes and accumulate a score. Return true when score exceeds 20.
+        // This mirrors Go's `someNode` — it short-circuits on first qualifying node.
+        let mut score = 0.0f64;
+        for node in nodes {
+            // Skip hidden nodes.
+            if !Self::is_probably_visible_in(doc, node) {
+                continue;
+            }
+
+            // Skip unlikely candidates that aren't maybe-candidates.
+            let class = doc.attr(node, "class").unwrap_or("");
+            let id = doc.attr(node, "id").unwrap_or("");
+            let match_string = format!("{class} {id}");
+            if crate::regexp::is_unlikely_candidate(&match_string)
+                && !crate::regexp::maybe_its_a_candidate(&match_string)
+            {
+                continue;
+            }
+
+            // Skip <p> nodes that are inside <li> elements.
+            if doc.tag_name(node) == "p" && Self::has_ancestor_tag_in(doc, node, "li") {
+                continue;
+            }
+
+            let node_text = doc.text_content(node);
+            let node_text = node_text.trim();
+            let len = node_text.chars().count();
+            if len < 140 {
+                continue;
+            }
+
+            score += ((len - 140) as f64).sqrt();
+            if score > 20.0 {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Visibility check operating on an external `doc` (no `self.doc` access).
+    ///
+    /// Mirrors `isProbablyVisible` but accepts an explicit document.
+    fn is_probably_visible_in(doc: &Document, id: NodeId) -> bool {
+        let style = doc.attr(id, "style").unwrap_or("");
+        let aria_hidden = doc.attr(id, "aria-hidden").unwrap_or("");
+        let class = doc.attr(id, "class").unwrap_or("");
+
+        (style.is_empty() || !crate::regexp::RX_DISPLAY_NONE.is_match(style))
+            && (style.is_empty() || !crate::regexp::RX_VISIBILITY_HIDDEN.is_match(style))
+            && !doc.has_attribute(id, "hidden")
+            && (aria_hidden.is_empty()
+                || aria_hidden != "true"
+                || class.contains("fallback-image"))
+    }
+
+    /// Ancestor-tag check operating on an external `doc` (no depth limit, no filter).
+    ///
+    /// Mirrors `hasAncestorTag(node, tag, -1, nil)` in Go.
+    fn has_ancestor_tag_in(doc: &Document, id: NodeId, tag: &str) -> bool {
+        let mut cur = id;
+        while let Some(parent) = doc.parent(cur) {
+            if doc.tag_name(parent) == tag {
+                return true;
+            }
+            cur = parent;
+        }
+        false
+    }
+
     /// Port of `ParseDocument` — parse a document (clones it to leave original untouched).
     pub fn parse_document(&mut self, doc: &Document, page_url: Option<&Url>) -> Result {
         self.parse_and_mutate(doc.clone(), page_url)
@@ -221,8 +318,27 @@ impl Parser {
             (String::new(), String::new(), 0, String::new())
         };
 
-        // Excerpt fallback: if metadata has no excerpt, use the article text.
-        let excerpt = metadata.get("excerpt").cloned().unwrap_or_default();
+        // Excerpt fallback: if metadata has no excerpt, use InnerText of the first <p>
+        // in the article content. Port of Go's `article.Excerpt()` lazy fallback.
+        let excerpt_meta = metadata.get("excerpt").cloned().unwrap_or_default();
+        let excerpt = if excerpt_meta.is_empty() {
+            // Find the first <p> inside the readable node.
+            let readable_for_excerpt = article_content
+                .and_then(|cid| self.doc.first_element_child(cid));
+            let first_p = readable_for_excerpt
+                .and_then(|r| self.get_element_by_tag_name(r, "p"));
+            if let Some(p) = first_p {
+                let p_text = inner_text(&self.doc, p);
+                let normalized: String = p_text.split_whitespace().collect::<Vec<_>>().join(" ");
+                normalized
+            } else {
+                String::new()
+            }
+        } else {
+            // Mirror Go's `article.Excerpt()`: always normalize whitespace
+            // with strings.Fields semantics regardless of source.
+            excerpt_meta.split_whitespace().collect::<Vec<_>>().join(" ")
+        };
 
         Ok(Article {
             title: self.article_title.clone(),
@@ -501,33 +617,35 @@ impl Parser {
     #[allow(dead_code)] // used in Phase 6 (grabArticle, cleanConditionally)
     /// Port of `getLinkDensity` — ratio of link chars to total chars in the node.
     fn get_link_density(&self, id: NodeId) -> f64 {
-        let mut total: usize = 0;
+        let mut total = crate::traverse::CharCounter::new();
         let mut link_weighted: f64 = 0.0;
 
         fn walk(
             doc: &Document,
             n: NodeId,
-            link_counter: &mut Option<(usize, f64)>, // (count, coefficient)
-            total: &mut usize,
+            link_counter: &mut Option<(crate::traverse::CharCounter, f64)>,
+            total: &mut crate::traverse::CharCounter,
             link_weighted: &mut f64,
         ) {
             if let Some(Node::Text(text)) = doc.html.tree.get(n).map(|x| x.value()) {
-                let count = crate::utils::char_count(&text.text);
-                *total += count;
-                if let Some((ref mut lc, _coeff)) = link_counter {
-                    *lc += count;
+                for r in text.text.chars() {
+                    total.count(r);
+                    if let Some((ref mut lc, _coeff)) = link_counter {
+                        lc.count(r);
+                    }
                 }
                 return;
             }
             let tag = doc.tag_name(n);
             if tag == "a" {
                 let coeff = Parser::get_link_density_coefficient(doc, n);
-                let mut my_counter: Option<(usize, f64)> = Some((0, coeff));
+                let mut my_counter: Option<(crate::traverse::CharCounter, f64)> =
+                    Some((crate::traverse::CharCounter::new(), coeff));
                 for child in doc.child_nodes(n) {
                     walk(doc, child, &mut my_counter, total, link_weighted);
                 }
                 if let Some((lc, c)) = my_counter {
-                    *link_weighted += lc as f64 * c;
+                    *link_weighted += lc.total() as f64 * c;
                 }
             } else {
                 for child in doc.child_nodes(n) {
@@ -538,7 +656,7 @@ impl Parser {
 
         walk(&self.doc, id, &mut None, &mut total, &mut link_weighted);
 
-        if total == 0 { 0.0 } else { link_weighted / total as f64 }
+        if total.total() == 0 { 0.0 } else { link_weighted / total.total() as f64 }
     }
 
     #[allow(dead_code)] // used in Phase 6 (cleanConditionally, grabArticle)
@@ -1094,7 +1212,12 @@ impl Parser {
 
     /// Port of `simplifyNestedElements` — collapse empty or redundant div/section wrappers.
     fn simplify_nested_elements(&mut self, article_content: NodeId) {
-        let mut node = self.doc.first_element_child(article_content);
+        // Mirror Go: start at articleContent itself (not its first child).
+        // Go's guard `node.Parent != nil` means articleContent is skipped when
+        // it has no parent (it's a detached wrapper div), so traversal descends
+        // directly into page_div.  Starting one level too deep caused the
+        // page_div's single-div children to be incorrectly collapsed.
+        let mut node = Some(article_content);
 
         while let Some(n) = node {
             let parent = self.doc.parent(n);
@@ -1150,7 +1273,10 @@ impl Parser {
         let attrs_to_remove: Vec<String> = {
             self.doc.get_all_attrs(id).into_iter()
                 .filter_map(|(k, _)| {
-                    if (k == "width" || k == "height") && !is_size_elem {
+                    // Remove width/height only from deprecated size-attribute elements
+                    // (table, th, td, hr, pre).  Keep them on <img> and others.
+                    // Go: `if !isDeprecatedSizeAttributeElems { continue }; fallthrough`
+                    if (k == "width" || k == "height") && is_size_elem {
                         return Some(k);
                     }
                     if PRESENTATIONAL_ATTRS.contains(&k.as_str()) {
@@ -1365,9 +1491,10 @@ impl Parser {
                     }
                 }
                 Some(serde_json::Value::Array(arr)) => {
-                    let authors: Vec<&str> = arr
+                    let authors: Vec<String> = arr
                         .iter()
                         .filter_map(|a| a.get("name")?.as_str())
+                        .map(|s| s.trim().to_string())
                         .collect();
                     meta.insert("byline".to_string(), authors.join(", "));
                 }
@@ -1740,6 +1867,17 @@ impl Parser {
     fn clean_conditionally(&mut self, root: NodeId, tag: &str) {
         if !self.flags.clean_conditionally {
             return;
+        }
+        if tag == "div" {
+            // Check for caption-credit in the full tree
+            let all = self.doc.get_elements_by_tag_name(root, "*");
+            for &n in &all {
+                let cls = self.doc.attr(n, "class").unwrap_or("").to_string();
+                if cls.contains("caption-credit") {
+                    let t = self.doc.tag_name(n);
+                    eprintln!("[DEBUG clean_conditionally] caption-credit element has tag={t:?} class={cls:?}");
+                }
+            }
         }
         let nodes = self.doc.get_elements_by_tag_name(root, tag);
         let to_remove: Vec<NodeId> = nodes
@@ -2153,18 +2291,26 @@ impl Parser {
                             }
                         } else if p.is_some() {
                             // Trim trailing whitespace from p, then close it.
-                            // Port of Go: if p has a next element sibling, move the
-                            // whitespace node to after p rather than removing it entirely.
-                            // This prevents missing space characters in article.text_content.
+                            // Go: check p.NextSibling (immediate, may be a text node).
+                            // Only reinsert before next if that immediate sibling is an
+                            // element — otherwise just remove. This matches Go's behaviour
+                            // where a text node between <p> and <ol> means "remove" rather
+                            // than "move".
                             if let Some(p_id) = p {
                                 loop {
                                     let last = last_child_node(&self.doc, p_id);
                                     match last {
                                         Some(l) if self.is_whitespace(l) => {
-                                            if let Some(next_elem) = self.doc.next_element_sibling(p_id) {
+                                            // Port of Go: p.NextSibling != nil &&
+                                            // p.NextSibling.Type == html.ElementNode
+                                            let next_sib = self.doc.next_sibling(p_id);
+                                            let next_is_elem = next_sib
+                                                .map(|n| self.doc.is_element(n))
+                                                .unwrap_or(false);
+                                            if next_is_elem {
                                                 // Detach from p and reinsert before next sibling.
                                                 self.doc.remove(l);
-                                                self.doc.insert_before(next_elem, l);
+                                                self.doc.insert_before(next_sib.unwrap(), l);
                                             } else {
                                                 self.doc.remove(l);
                                             }
@@ -2202,6 +2348,14 @@ impl Parser {
                         node = self.get_next_node(new_node, false);
                         continue;
                     } else if !self.has_child_block_element(n) {
+                        let cls = self.doc.attr(n, "class").unwrap_or("").to_string();
+                        if cls.contains("caption") {
+                            eprintln!("[DEBUG] renaming to p: class={cls:?} has_child_block={}", self.has_child_block_element(n));
+                            for child in self.doc.child_nodes(n) {
+                                let tag = self.doc.tag_name(child);
+                                eprintln!("[DEBUG]   child: tag={tag}");
+                            }
+                        }
                         self.set_node_tag(n, "p");
                         elements_to_score.push(n);
                     }
