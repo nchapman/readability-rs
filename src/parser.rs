@@ -8,6 +8,7 @@ use url::Url;
 
 use crate::article::Article;
 use crate::dom::Document;
+use crate::traverse::{is_comma, CharCounter};
 use crate::error::Error;
 use crate::regexp::*;
 use crate::render::inner_text;
@@ -52,12 +53,16 @@ const DEPRECATED_SIZE_ATTR_ELEMS: &[&str] = &["table", "th", "td", "hr", "pre"];
 /// Port of `flags` — controls which phases of the algorithm are active.
 #[derive(Clone, Debug)]
 struct Flags {
-    #[allow(dead_code)] // used in Phase 6 (grabArticle)
     strip_unlikelys: bool,
-    #[allow(dead_code)] // used in Phase 6 (getClassWeight)
     use_weight_classes: bool,
-    #[allow(dead_code)] // used in Phase 6 (cleanConditionally)
     clean_conditionally: bool,
+}
+
+/// Saved state from a failed grab_article pass.
+struct ParseAttempt {
+    article_content: NodeId,
+    doc_snapshot: Document,
+    text_length: usize,
 }
 
 impl Default for Flags {
@@ -98,6 +103,11 @@ pub struct Parser {
     article_dir: String,
     article_lang: String,
     flags: Flags,
+
+    // ── Per-pass side tables (reset at start of each grab_article pass) ──
+    score_map: HashMap<NodeId, f64>,
+    data_tables: HashSet<NodeId>,
+    attempts: Vec<ParseAttempt>,
 }
 
 impl Parser {
@@ -123,6 +133,9 @@ impl Parser {
             article_dir: String::new(),
             article_lang: String::new(),
             flags: Flags::default(),
+            score_map: HashMap::new(),
+            data_tables: HashSet::new(),
+            attempts: Vec::new(),
         }
     }
 
@@ -149,6 +162,9 @@ impl Parser {
         self.article_dir = String::new();
         self.article_lang = String::new();
         self.flags = Flags::default();
+        self.score_map.clear();
+        self.data_tables.clear();
+        self.attempts.clear();
 
         // Enforce element limit.
         if self.max_elems_to_parse > 0 {
@@ -1537,14 +1553,995 @@ impl Parser {
         result
     }
 
-    // ── Phase 6 stubs (grabArticle and helpers) ───────────────────────────
+    // ── Score / table side-table accessors ───────────────────────────────
+
+    /// Store a content score for `id` in the per-pass side table.
+    fn set_content_score(&mut self, id: NodeId, score: f64) {
+        self.score_map.insert(id, score);
+    }
+
+    /// Get the content score for `id` (0.0 if not scored).
+    fn get_content_score(&self, id: NodeId) -> f64 {
+        self.score_map.get(&id).copied().unwrap_or(0.0)
+    }
+
+    /// True if `id` has been scored.
+    fn has_content_score(&self, id: NodeId) -> bool {
+        self.score_map.contains_key(&id)
+    }
+
+    /// Mark or unmark `id` as a data (non-layout) table.
+    fn set_readability_data_table(&mut self, id: NodeId, is_data: bool) {
+        if is_data {
+            self.data_tables.insert(id);
+        } else {
+            self.data_tables.remove(&id);
+        }
+    }
+
+    /// True if `id` has been marked as a data table.
+    fn is_readability_data_table(&self, id: NodeId) -> bool {
+        self.data_tables.contains(&id)
+    }
+
+    // ── Node initialization ───────────────────────────────────────────────
+
+    /// Port of `initializeNode` — set initial content score from tag name and class weight.
+    fn initialize_node(&mut self, id: NodeId) {
+        let class_weight = self.get_class_weight(id) as f64;
+        let tag_score: f64 = match self.doc.tag_name(id) {
+            "div" => 5.0,
+            "pre" | "td" | "blockquote" => 3.0,
+            "address" | "ol" | "ul" | "dl" | "dd" | "dt" | "li" | "form" => -3.0,
+            "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "th" => -5.0,
+            _ => 0.0,
+        };
+        self.set_content_score(id, class_weight + tag_score);
+    }
+
+    // ── Video embed detection ─────────────────────────────────────────────
+
+    /// Port of `isVideoEmbed` — true if the element is an embedded video.
+    fn is_video_embed(&self, id: NodeId) -> bool {
+        let tag = self.doc.tag_name(id);
+        if tag != "object" && tag != "embed" && tag != "iframe" {
+            return false;
+        }
+        let rx = self.allowed_video_regex.as_ref().unwrap_or(&*RX_VIDEOS);
+        for (_, val) in self.doc.get_all_attrs(id) {
+            if rx.is_match(&val) {
+                return true;
+            }
+        }
+        if tag == "object" {
+            let inner = self.doc.inner_html(id);
+            if rx.is_match(&inner) {
+                return true;
+            }
+        }
+        false
+    }
+
+    // ── Table analysis ────────────────────────────────────────────────────
+
+    /// Port of `getRowAndColumnCount` — count rows and max columns in a table.
+    fn get_row_and_column_count(&self, table: NodeId) -> (usize, usize) {
+        let mut rows: usize = 0;
+        let mut columns: usize = 0;
+        let trs = self.doc.get_elements_by_tag_name(table, "tr");
+        for tr in &trs {
+            let row_span: usize = self
+                .doc
+                .attr(*tr, "rowspan")
+                .and_then(|s| s.parse().ok())
+                .filter(|&v| v > 0)
+                .unwrap_or(1);
+            rows += row_span;
+
+            let mut cols_in_row: usize = 0;
+            let cells = self.doc.get_elements_by_tag_name(*tr, "td");
+            for cell in &cells {
+                let col_span: usize = self
+                    .doc
+                    .attr(*cell, "colspan")
+                    .and_then(|s| s.parse().ok())
+                    .filter(|&v| v > 0)
+                    .unwrap_or(1);
+                cols_in_row += col_span;
+            }
+            if cols_in_row > columns {
+                columns = cols_in_row;
+            }
+        }
+        (rows, columns)
+    }
+
+    /// Port of `markDataTables` — classify each `<table>` as data or layout.
+    fn mark_data_tables(&mut self, root: NodeId) {
+        let tables = self.doc.get_elements_by_tag_name(root, "table");
+        for table in tables {
+            // If parent was removed (e.g. nested within a removed table), skip.
+            if self.doc.parent(table).is_none() {
+                continue;
+            }
+
+            // role="presentation" → layout table.
+            if self.doc.attr(table, "role").unwrap_or("") == "presentation" {
+                self.set_readability_data_table(table, false);
+                continue;
+            }
+
+            // datatable="0" → layout table.
+            if self.doc.attr(table, "datatable").unwrap_or("") == "0" {
+                self.set_readability_data_table(table, false);
+                continue;
+            }
+
+            // summary attribute → data table.
+            if self.doc.has_attribute(table, "summary") {
+                self.set_readability_data_table(table, true);
+                continue;
+            }
+
+            // Scan children for structural indicators.
+            let (is_data, conclusive) = scan_for_data_table_signals(&self.doc, table);
+            if conclusive {
+                self.set_readability_data_table(table, is_data);
+                continue;
+            }
+
+            // Fall back to row/column heuristics.
+            let (rows, cols) = self.get_row_and_column_count(table);
+            if rows == 1 || cols == 1 {
+                self.set_readability_data_table(table, false);
+                continue;
+            }
+            if rows >= 10 || cols > 4 {
+                self.set_readability_data_table(table, true);
+                continue;
+            }
+            if rows * cols > 10 {
+                self.set_readability_data_table(table, true);
+            }
+        }
+    }
+
+    // ── Cleaning helpers ──────────────────────────────────────────────────
+
+    /// Port of `clean` — remove all elements with `tag` unless they are video embeds.
+    fn clean(&mut self, root: NodeId, tag: &str) {
+        let nodes = self.doc.get_elements_by_tag_name(root, tag);
+        let to_remove: Vec<NodeId> = nodes
+            .into_iter()
+            .filter(|&id| !self.is_video_embed(id))
+            .collect();
+        for id in to_remove.into_iter().rev() {
+            if self.doc.parent(id).is_some() {
+                self.doc.remove(id);
+            }
+        }
+    }
+
+    /// Port of `cleanHeaders` — remove h1/h2 with negative class weight.
+    fn clean_headers(&mut self, root: NodeId) {
+        let nodes = self.doc.get_all_nodes_with_tag(root, &["h1", "h2"]);
+        let to_remove: Vec<NodeId> = nodes
+            .into_iter()
+            .filter(|&id| self.get_class_weight(id) < 0)
+            .collect();
+        for id in to_remove.into_iter().rev() {
+            if self.doc.parent(id).is_some() {
+                self.doc.remove(id);
+            }
+        }
+    }
+
+    /// Port of `cleanConditionally` — remove elements that look like non-content.
+    fn clean_conditionally(&mut self, root: NodeId, tag: &str) {
+        if !self.flags.clean_conditionally {
+            return;
+        }
+        let nodes = self.doc.get_elements_by_tag_name(root, tag);
+        let to_remove: Vec<NodeId> = nodes
+            .into_iter()
+            .filter(|&node| self.should_clean_conditionally(node, tag))
+            .collect();
+        for id in to_remove.into_iter().rev() {
+            if self.doc.parent(id).is_some() {
+                self.doc.remove(id);
+            }
+        }
+    }
+
+    /// Determine whether a single node should be removed by `clean_conditionally`.
+    fn should_clean_conditionally(&self, node: NodeId, tag: &str) -> bool {
+        // Data tables are never removed.
+        if tag == "table" && self.is_readability_data_table(node) {
+            return false;
+        }
+
+        // Nodes inside data tables are never removed.
+        let data_tables = &self.data_tables;
+        if self.has_ancestor_tag(node, "table", -1, Some(|_doc: &Document, id: NodeId| {
+            data_tables.contains(&id)
+        })) {
+            return false;
+        }
+
+        // Nodes inside <code> blocks are never removed.
+        if self.has_ancestor_tag::<fn(&Document, NodeId) -> bool>(node, "code", 3, None) {
+            return false;
+        }
+
+        let weight = self.get_class_weight(node);
+        if weight < 0 {
+            return true;
+        }
+
+        // Walk the subtree to collect content statistics.
+        let mut stats = CondStats::new();
+        let is_video_fn = |id: NodeId| self.is_video_embed(id);
+        let mut dummy_link_acc = CharCounter::new();
+        for child in self.doc.child_nodes(node) {
+            walk_cond(
+                &self.doc,
+                child,
+                &mut stats,
+                false,
+                false,
+                false,
+                0.0,
+                &mut dummy_link_acc,
+                false,
+                &is_video_fn,
+            );
+        }
+
+        if stats.has_video_embed {
+            return false;
+        }
+
+        let is_list = tag == "ul"
+            || tag == "ol"
+            || (stats.chars.total() > 0
+                && stats.list_chars.total() as f64 / stats.chars.total() as f64 > 0.9);
+
+        if stats.commas < 10 {
+            // Single-text-node ad / loading word check.
+            if !stats.inner_text_single.is_empty() {
+                let trimmed = stats.inner_text_single.trim();
+                if RX_AD_WORDS.is_match(trimmed) || RX_LOADING_WORDS.is_match(trimmed) {
+                    return true;
+                }
+            }
+
+            let total = stats.chars.total() as f64;
+            let (text_density, link_density, heading_density) = if total > 0.0 {
+                (
+                    stats.text_chars.total() as f64 / total,
+                    stats.link_chars_weighted / total,
+                    stats.heading_chars.total() as f64 / total,
+                )
+            } else {
+                (0.0, 0.0, 0.0)
+            };
+
+            const LI_COUNT_OFFSET: i64 = -100;
+
+            let have_to_remove = (stats.img_count > 1
+                && (stats.p_count as f64 / stats.img_count as f64) < 0.5
+                && !self.has_ancestor_tag::<fn(&Document, NodeId) -> bool>(
+                    node, "figure", 3, None,
+                ))
+                || (!is_list
+                    && (stats.li_count as i64 + LI_COUNT_OFFSET) > stats.p_count as i64)
+                || ((stats.input_count as f64) > (stats.p_count as f64 / 3.0).floor())
+                || (!is_list
+                    && heading_density < 0.9
+                    && stats.chars.total() < 25
+                    && (stats.img_count == 0 || stats.img_count > 2)
+                    && link_density > 0.0
+                    && !self.has_ancestor_tag::<fn(&Document, NodeId) -> bool>(
+                        node, "figure", 3, None,
+                    ))
+                || (!is_list && weight < 25 && link_density > 0.2)
+                || (weight >= 25 && link_density > 0.5)
+                || ((stats.embed_count == 1 && stats.chars.total() < 75)
+                    || stats.embed_count > 1)
+                || (stats.img_count == 0 && text_density == 0.0);
+
+            // Allow simple lists of images to remain.
+            if is_list && have_to_remove {
+                for child in self.doc.children(node) {
+                    if self.doc.children(child).len() > 1 {
+                        return have_to_remove;
+                    }
+                }
+                if stats.img_count == stats.li_count {
+                    return false;
+                }
+            }
+
+            return have_to_remove;
+        }
+
+        false
+    }
+
+    // ── Article preparation ───────────────────────────────────────────────
+
+    /// Port of `prepArticle` — clean article content for display.
+    fn prep_article(&mut self, article_content: NodeId) {
+        self.mark_data_tables(article_content);
+        self.fix_lazy_images(article_content);
+
+        self.clean_conditionally(article_content, "form");
+        self.clean_conditionally(article_content, "fieldset");
+        self.clean(article_content, "object");
+        self.clean(article_content, "embed");
+        self.clean(article_content, "footer");
+        self.clean(article_content, "link");
+        self.clean(article_content, "aside");
+
+        // Remove elements that have "share" in their class/id and are small.
+        let share_threshold = self.char_thresholds;
+        self.remove_share_elements(article_content, share_threshold);
+
+        self.clean(article_content, "iframe");
+        self.clean(article_content, "input");
+        self.clean(article_content, "textarea");
+        self.clean(article_content, "select");
+        self.clean(article_content, "button");
+        self.clean_headers(article_content);
+
+        // These last since prior cleaning may affect them.
+        self.clean_conditionally(article_content, "table");
+        self.clean_conditionally(article_content, "ul");
+        self.clean_conditionally(article_content, "div");
+
+        // Replace h1 with h2 — h1 should only appear as the title.
+        let h1s = self.doc.get_elements_by_tag_name(article_content, "h1");
+        for id in h1s {
+            self.doc.rename_tag(id, "h2");
+        }
+
+        // Remove empty paragraphs (no meaningful content).
+        let ps = self.doc.get_elements_by_tag_name(article_content, "p");
+        let to_remove: Vec<NodeId> = ps
+            .into_iter()
+            .filter(|&p_id| !find_content_in_node(&self.doc, p_id))
+            .collect();
+        for id in to_remove.into_iter().rev() {
+            if self.doc.parent(id).is_some() {
+                self.doc.remove(id);
+            }
+        }
+
+        // Remove <br> immediately before a <p>.
+        let brs = self.doc.get_elements_by_tag_name(article_content, "br");
+        let to_remove_brs: Vec<NodeId> = brs
+            .into_iter()
+            .filter(|&br_id| {
+                let next_sib = self.doc.next_sibling(br_id);
+                next_sib
+                    .and_then(|n| self.next_node(n))
+                    .map(|n| self.doc.tag_name(n) == "p")
+                    .unwrap_or(false)
+            })
+            .collect();
+        for id in to_remove_brs.into_iter().rev() {
+            if self.doc.parent(id).is_some() {
+                self.doc.remove(id);
+            }
+        }
+
+        self.clean_styles(article_content);
+
+        // Flatten single-cell tables.
+        let tables = self.doc.get_elements_by_tag_name(article_content, "table");
+        for table_id in tables {
+            if self.doc.parent(table_id).is_none() {
+                continue;
+            }
+
+            let tbody = if self.has_single_tag_inside_element(table_id, "tbody") {
+                self.doc.first_element_child(table_id)
+            } else {
+                Some(table_id)
+            };
+            let tbody = match tbody {
+                Some(t) => t,
+                None => continue,
+            };
+
+            if !self.has_single_tag_inside_element(tbody, "tr") {
+                continue;
+            }
+            let row = match self.doc.first_element_child(tbody) {
+                Some(r) => r,
+                None => continue,
+            };
+
+            if !self.has_single_tag_inside_element(row, "td") {
+                continue;
+            }
+            let cell = match self.doc.first_element_child(row) {
+                Some(c) => c,
+                None => continue,
+            };
+
+            let new_tag =
+                if self.doc.child_nodes(cell).iter().all(|&c| self.is_phrasing_content(c)) {
+                    "p"
+                } else {
+                    "div"
+                };
+
+            self.doc.rename_tag(cell, new_tag);
+
+            // Replace the table with the cell in table's parent.
+            self.doc.insert_before(table_id, cell);
+            self.doc.remove(table_id);
+        }
+    }
+
+    /// Remove share-element divs (elements whose class+id contains "share" and whose text is short).
+    fn remove_share_elements(&mut self, node: NodeId, share_threshold: usize) {
+        // Collect candidates first to avoid borrow issues.
+        let children: Vec<NodeId> = self.doc.child_nodes(node);
+        for child in children {
+            if !self.doc.is_element(child) {
+                continue;
+            }
+            let class = self.doc.attr(child, "class").unwrap_or("").to_string();
+            let id_attr = self.doc.attr(child, "id").unwrap_or("").to_string();
+            let match_string = format!("{class} {id_attr}");
+            if match_string.len() > 1
+                && RX_SHARE_ELEMENTS.is_match(&match_string)
+                && crate::utils::char_count(&self.doc.text_content(child)) < share_threshold
+            {
+                if self.doc.parent(child).is_some() {
+                    self.doc.remove(child);
+                }
+            } else {
+                self.remove_share_elements(child, share_threshold);
+            }
+        }
+    }
+
+    // ── Main article extraction ───────────────────────────────────────────
 
     /// Port of `grabArticle` — score and select article content.
-    ///
-    /// Phase 6 implementation — returns `None` until scoring is ported.
-    #[allow(dead_code)]
     fn grab_article(&mut self) -> Option<NodeId> {
-        None // TODO: Phase 6
+        // Save a pristine snapshot to restore at the start of each pass.
+        let base_doc = self.doc.clone();
+
+        loop {
+            // Restore the document to a clean state for this pass.
+            self.doc = base_doc.clone();
+            self.score_map.clear();
+            self.data_tables.clear();
+
+            let page = self.doc.body()?;
+
+            // ── Node prepping ─────────────────────────────────────────────
+            let mut elements_to_score: Vec<NodeId> = Vec::new();
+            let mut node = self.doc.document_element();
+            let mut should_remove_title_header = true;
+
+            'grab_loop: while let Some(n) = node {
+                let tag = self.doc.tag_name(n).to_string();
+                let class = self.doc.attr(n, "class").unwrap_or("").to_string();
+                let id_attr = self.doc.attr(n, "id").unwrap_or("").to_string();
+                let match_string = format!("{class} {id_attr}");
+
+                if tag == "html" {
+                    self.article_lang =
+                        self.doc.attr(n, "lang").unwrap_or("").to_string();
+                }
+
+                if !self.is_probably_visible(n) {
+                    node = self.remove_and_get_next(n);
+                    continue;
+                }
+
+                // Remove aria-modal="true" role="dialog" elements.
+                if self.doc.attr(n, "aria-modal").unwrap_or("") == "true"
+                    && self.doc.attr(n, "role").unwrap_or("") == "dialog"
+                {
+                    node = self.remove_and_get_next(n);
+                    continue;
+                }
+
+                // Byline detection and removal.
+                if self.article_byline.is_empty() && self.is_valid_byline(n, &match_string) {
+                    // Look for [itemprop="name"] child for a more accurate byline.
+                    let end_marker = self.get_next_node(n, true);
+                    let mut next = self.get_next_node(n, false);
+                    let mut found_name = false;
+                    while let Some(nx) = next {
+                        if end_marker.map(|e| e == nx).unwrap_or(false) {
+                            break;
+                        }
+                        let itemprop = self.doc.attr(nx, "itemprop").unwrap_or("").to_string();
+                        if itemprop.contains("name") {
+                            self.article_byline = self.get_inner_text(nx, false);
+                            node = self.remove_and_get_next(n);
+                            found_name = true;
+                            break;
+                        }
+                        next = self.get_next_node(nx, false);
+                    }
+                    if found_name {
+                        continue 'grab_loop;
+                    }
+                    let byline_text = self.get_inner_text(n, false);
+                    let n_char = crate::utils::char_count(&byline_text);
+                    if n_char > 0 && n_char < 100 {
+                        self.article_byline = normalize_spaces(byline_text.trim());
+                        node = self.remove_and_get_next(n);
+                        continue;
+                    }
+                }
+
+                if should_remove_title_header && self.header_duplicates_title(n) {
+                    should_remove_title_header = false;
+                    node = self.remove_and_get_next(n);
+                    continue;
+                }
+
+                // Remove unlikely candidates.
+                if self.flags.strip_unlikelys {
+                    if tag != "body"
+                        && tag != "a"
+                        && crate::regexp::is_unlikely_candidate(&match_string)
+                        && !crate::regexp::maybe_its_a_candidate(&match_string)
+                        && !self.has_ancestor_tag::<fn(&Document, NodeId) -> bool>(
+                            n, "table", 3, None,
+                        )
+                        && !self.has_ancestor_tag::<fn(&Document, NodeId) -> bool>(
+                            n, "code", 3, None,
+                        )
+                    {
+                        node = self.remove_and_get_next(n);
+                        continue;
+                    }
+
+                    let role = self.doc.attr(n, "role").unwrap_or("").to_string();
+                    if UNLIKELY_ROLES.contains(&role.as_str()) {
+                        node = self.remove_and_get_next(n);
+                        continue;
+                    }
+                }
+
+                // Remove empty structural elements.
+                match tag.as_str() {
+                    "div" | "section" | "header" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
+                        if self.is_element_without_content(n) {
+                            node = self.remove_and_get_next(n);
+                            continue;
+                        }
+                    }
+                    _ => {}
+                }
+
+                if self.tags_to_score.contains(&tag) {
+                    elements_to_score.push(n);
+                }
+
+                // Convert divs to p where appropriate.
+                if tag == "div" {
+                    // Wrap inline phrasing content into <p> elements.
+                    let child_nodes_snap = self.doc.child_nodes(n);
+                    let mut p: Option<NodeId> = None;
+                    for &child in &child_nodes_snap {
+                        if self.doc.parent(child).is_none() {
+                            // Already moved.
+                            p = None;
+                            continue;
+                        }
+                        if self.is_phrasing_content(child) {
+                            if let Some(p_id) = p {
+                                self.doc.append_child(p_id, child);
+                            } else if !self.is_whitespace(child) {
+                                let new_p = self.doc.create_element("p");
+                                // Clone child, put clone into new_p, replace child with new_p.
+                                let child_clone = clone_node(&mut self.doc, child);
+                                self.doc.insert_before(child, new_p);
+                                self.doc.append_child(new_p, child_clone);
+                                self.doc.remove(child);
+                                p = Some(new_p);
+                            }
+                        } else if p.is_some() {
+                            // Trim trailing whitespace from p, then close it.
+                            if let Some(p_id) = p {
+                                loop {
+                                    let last = last_child_node(&self.doc, p_id);
+                                    match last {
+                                        Some(l) if self.is_whitespace(l) => {
+                                            // Check if p has a next element sibling.
+                                            let next_sib =
+                                                self.doc.next_element_sibling(p_id);
+                                            if next_sib.is_some() {
+                                                // Move whitespace after p (Go compat).
+                                                self.doc.remove(l);
+                                            } else {
+                                                self.doc.remove(l);
+                                            }
+                                        }
+                                        _ => break,
+                                    }
+                                }
+                            }
+                            p = None;
+                        }
+                    }
+
+                    // div with single p child → promote the p.
+                    if self.has_single_tag_inside_element(n, "p")
+                        && self.get_link_density(n) < 0.25
+                    {
+                        let div_id = self.doc.attr(n, "id").unwrap_or("").to_string();
+                        let div_class = self.doc.attr(n, "class").unwrap_or("").to_string();
+                        let new_node = self.doc.children(n)[0];
+                        // Replace div with its child p.
+                        self.doc.insert_before(n, new_node);
+                        self.doc.remove(n);
+                        // Inherit id/class if the promoted node lacks them.
+                        if !div_id.is_empty()
+                            && self.doc.attr(new_node, "id").unwrap_or("").is_empty()
+                        {
+                            self.doc.set_attr(new_node, "id", &div_id);
+                        }
+                        if !div_class.is_empty()
+                            && self.doc.attr(new_node, "class").unwrap_or("").is_empty()
+                        {
+                            self.doc.set_attr(new_node, "class", &div_class);
+                        }
+                        elements_to_score.push(new_node);
+                        node = self.get_next_node(new_node, false);
+                        continue;
+                    } else if !self.has_child_block_element(n) {
+                        self.set_node_tag(n, "p");
+                        elements_to_score.push(n);
+                    }
+                }
+
+                node = self.get_next_node(n, false);
+            }
+
+            // ── Scoring loop ──────────────────────────────────────────────
+            let mut candidates: Vec<NodeId> = Vec::new();
+
+            for &elem in &elements_to_score {
+                if self.doc.parent(elem).is_none() {
+                    continue;
+                }
+                let parent_tag = self
+                    .doc
+                    .parent(elem)
+                    .map(|p| self.doc.tag_name(p).to_string())
+                    .unwrap_or_default();
+                if parent_tag.is_empty() {
+                    continue;
+                }
+
+                let (num_chars, num_commas) =
+                    crate::traverse::count_chars_and_commas(&self.doc, elem);
+                if num_chars < 25 {
+                    continue;
+                }
+
+                let ancestors = self.get_node_ancestors(elem, 5);
+                if ancestors.is_empty() {
+                    continue;
+                }
+
+                // Base score + commas + 1 + char bonus.
+                let content_score = 1
+                    + num_commas
+                    + 1
+                    + (((num_chars as f64) / 100.0).floor() as usize).min(3);
+
+                for (level, &ancestor) in ancestors.iter().enumerate() {
+                    let anc_tag = self.doc.tag_name(ancestor).to_string();
+                    if anc_tag.is_empty() {
+                        continue;
+                    }
+                    if self.doc.parent(ancestor).is_none() {
+                        continue;
+                    }
+                    // Verify parent of ancestor is an element.
+                    let anc_parent_is_elem = self
+                        .doc
+                        .parent(ancestor)
+                        .map(|p| self.doc.is_element(p))
+                        .unwrap_or(false);
+                    if !anc_parent_is_elem {
+                        continue;
+                    }
+
+                    if !self.has_content_score(ancestor) {
+                        self.initialize_node(ancestor);
+                        candidates.push(ancestor);
+                    }
+
+                    let score_divider: f64 = match level {
+                        0 => 1.0,
+                        1 => 2.0,
+                        _ => (level as f64) * 3.0,
+                    };
+
+                    let ancestor_score = self.get_content_score(ancestor);
+                    self.set_content_score(
+                        ancestor,
+                        ancestor_score + content_score as f64 / score_divider,
+                    );
+                }
+            }
+
+            // Scale scores by link density.
+            for &candidate in &candidates {
+                let score = self.get_content_score(candidate)
+                    * (1.0 - self.get_link_density(candidate));
+                self.set_content_score(candidate, score);
+            }
+
+            // Sort candidates descending by score.
+            candidates.sort_by(|&a, &b| {
+                self.get_content_score(b)
+                    .partial_cmp(&self.get_content_score(a))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+
+            let top_candidates: Vec<NodeId> = candidates
+                .iter()
+                .copied()
+                .take(self.n_top_candidates)
+                .collect();
+
+            // ── Top candidate selection ───────────────────────────────────
+            let mut top_candidate: Option<NodeId> = top_candidates.first().copied();
+            let mut needed_to_create_top_candidate = false;
+
+            if top_candidate.is_none()
+                || top_candidate
+                    .map(|tc| self.doc.tag_name(tc) == "body")
+                    .unwrap_or(false)
+            {
+                // Wrap all body children in a new div.
+                let new_div = self.doc.create_element("div");
+                needed_to_create_top_candidate = true;
+                // Move all body children into new_div.
+                loop {
+                    let first = self
+                        .doc
+                        .html
+                        .tree
+                        .get(page)
+                        .and_then(|n| n.first_child().map(|c| c.id()));
+                    match first {
+                        Some(child) => self.doc.append_child(new_div, child),
+                        None => break,
+                    }
+                }
+                self.doc.append_child(page, new_div);
+                self.initialize_node(new_div);
+                top_candidate = Some(new_div);
+            } else {
+                let tc = top_candidate.unwrap();
+                let top_candidate_score = self.get_content_score(tc);
+
+                // Check for alternative ancestors shared by multiple top candidates.
+                let mut alternative_ancestors: Vec<Vec<NodeId>> = Vec::new();
+                for &alt in top_candidates.iter().skip(1) {
+                    if self.get_content_score(alt) / top_candidate_score >= 0.75 {
+                        let ancs = self.get_node_ancestors(alt, 0);
+                        alternative_ancestors.push(ancs);
+                    }
+                }
+
+                const MINIMUM_TOP_CANDIDATES: usize = 3;
+                if alternative_ancestors.len() >= MINIMUM_TOP_CANDIDATES {
+                    let mut parent_of_tc = self.doc.parent(tc);
+                    'walk_up: while let Some(pot) = parent_of_tc {
+                        if self.doc.tag_name(pot) == "body" {
+                            break;
+                        }
+                        let mut count = 0;
+                        for anc_list in &alternative_ancestors {
+                            if anc_list.contains(&pot) {
+                                count += 1;
+                            }
+                            if count >= MINIMUM_TOP_CANDIDATES {
+                                top_candidate = Some(pot);
+                                break 'walk_up;
+                            }
+                        }
+                        parent_of_tc = self.doc.parent(pot);
+                    }
+                }
+
+                let tc = top_candidate.unwrap();
+                if !self.has_content_score(tc) {
+                    self.initialize_node(tc);
+                }
+
+                // Walk up the tree if score improves.
+                let mut parent_of_tc = self.doc.parent(tc);
+                let mut last_score = self.get_content_score(tc);
+                let score_threshold = last_score / 3.0;
+                while let Some(pot) = parent_of_tc {
+                    if self.doc.tag_name(pot) == "body" {
+                        break;
+                    }
+                    if !self.has_content_score(pot) {
+                        parent_of_tc = self.doc.parent(pot);
+                        continue;
+                    }
+                    let parent_score = self.get_content_score(pot);
+                    if parent_score < score_threshold {
+                        break;
+                    }
+                    if parent_score > last_score {
+                        top_candidate = Some(pot);
+                        break;
+                    }
+                    last_score = parent_score;
+                    parent_of_tc = self.doc.parent(pot);
+                }
+
+                // If top candidate is the only child, use parent.
+                let tc = top_candidate.unwrap();
+                let mut parent_of_tc = self.doc.parent(tc);
+                while let Some(pot) = parent_of_tc {
+                    if self.doc.tag_name(pot) == "body" {
+                        break;
+                    }
+                    if self.doc.children(pot).len() != 1 {
+                        break;
+                    }
+                    top_candidate = Some(pot);
+                    parent_of_tc = self.doc.parent(pot);
+                }
+
+                let tc = top_candidate.unwrap();
+                if !self.has_content_score(tc) {
+                    self.initialize_node(tc);
+                }
+            }
+
+            let top_candidate = top_candidate.unwrap();
+
+            // ── Sibling gathering ─────────────────────────────────────────
+            let article_content = self.doc.create_element("div");
+            let sibling_score_threshold =
+                10.0_f64.max(self.get_content_score(top_candidate) * 0.2);
+            let top_candidate_score = self.get_content_score(top_candidate);
+            let top_candidate_class = self
+                .doc
+                .attr(top_candidate, "class")
+                .unwrap_or("")
+                .to_string();
+
+            let parent_of_tc = match self.doc.parent(top_candidate) {
+                Some(p) => p,
+                None => {
+                    // No parent — just wrap top_candidate alone.
+                    self.doc.append_child(article_content, top_candidate);
+                    self.prep_article(article_content);
+                    return Some(article_content);
+                }
+            };
+
+            let siblings = self.doc.children(parent_of_tc);
+            for sibling in siblings {
+                let mut append = false;
+
+                if sibling == top_candidate {
+                    append = true;
+                } else {
+                    let mut content_bonus = 0.0_f64;
+                    let sib_class = self.doc.attr(sibling, "class").unwrap_or("").to_string();
+                    if sib_class == top_candidate_class && !top_candidate_class.is_empty() {
+                        content_bonus += top_candidate_score * 0.2;
+                    }
+
+                    if self.has_content_score(sibling)
+                        && self.get_content_score(sibling) + content_bonus
+                            >= sibling_score_threshold
+                    {
+                        append = true;
+                    } else if self.doc.tag_name(sibling) == "p" {
+                        let link_density = self.get_link_density(sibling);
+                        let node_content = self.get_inner_text(sibling, true);
+                        let node_length = crate::utils::char_count(&node_content);
+
+                        append = (node_length > 80 && link_density < 0.25)
+                            || (node_length < 80
+                                && node_length > 0
+                                && link_density == 0.0
+                                && RX_SENTENCE_PERIOD.is_match(&node_content));
+                    }
+                }
+
+                if append {
+                    let sib_tag = self.doc.tag_name(sibling).to_string();
+                    if !ALTER_TO_DIV_EXCEPTIONS.contains(&sib_tag.as_str()) {
+                        self.doc.rename_tag(sibling, "div");
+                    }
+                    self.doc.append_child(article_content, sibling);
+                }
+            }
+
+            // ── Prep and wrap ─────────────────────────────────────────────
+            self.prep_article(article_content);
+
+            if needed_to_create_top_candidate {
+                // The fake div was already moved into article_content.
+                // Find it (should be the first div child) and tag it.
+                let first_child = self.doc.first_element_child(article_content);
+                if let Some(fc) = first_child {
+                    if self.doc.tag_name(fc) == "div" {
+                        self.doc.set_attr(fc, "id", "readability-page-1");
+                        self.doc.set_attr(fc, "class", "page");
+                    }
+                }
+            } else {
+                let page_div = self.doc.create_element("div");
+                self.doc.set_attr(page_div, "id", "readability-page-1");
+                self.doc.set_attr(page_div, "class", "page");
+                // Move all children of article_content into page_div.
+                loop {
+                    let first = self
+                        .doc
+                        .html
+                        .tree
+                        .get(article_content)
+                        .and_then(|n| n.first_child().map(|c| c.id()));
+                    match first {
+                        Some(child) => self.doc.append_child(page_div, child),
+                        None => break,
+                    }
+                }
+                self.doc.append_child(article_content, page_div);
+            }
+
+            // ── Length check and flag cycling ─────────────────────────────
+            let (text_length, _) =
+                crate::traverse::count_chars_and_commas(&self.doc, article_content);
+
+            if text_length < self.char_thresholds {
+                let doc_snap = self.doc.clone();
+                self.attempts.push(ParseAttempt {
+                    article_content,
+                    doc_snapshot: doc_snap,
+                    text_length,
+                });
+
+                if self.flags.strip_unlikelys {
+                    self.flags.strip_unlikelys = false;
+                } else if self.flags.use_weight_classes {
+                    self.flags.use_weight_classes = false;
+                } else if self.flags.clean_conditionally {
+                    self.flags.clean_conditionally = false;
+                } else {
+                    // All flags exhausted — use the attempt with the most text.
+                    self.attempts
+                        .sort_by(|a, b| b.text_length.cmp(&a.text_length));
+                    if self.attempts[0].text_length == 0 {
+                        return None;
+                    }
+                    let best_content = self.attempts[0].article_content;
+                    self.doc = self.attempts[0].doc_snapshot.clone();
+                    return Some(best_content);
+                }
+                // Try next pass.
+                continue;
+            }
+
+            return Some(article_content);
+        }
     }
 }
 
@@ -1557,6 +2554,305 @@ impl Default for Parser {
 }
 
 // ── Free helpers (not methods — may operate on a foreign Document) ────────────
+
+// ── CondStats and walk_cond (used by clean_conditionally) ────────────────────
+
+/// Accumulates statistics for `should_clean_conditionally`.
+struct CondStats {
+    chars: CharCounter,
+    text_chars: CharCounter,
+    list_chars: CharCounter,
+    heading_chars: CharCounter,
+    link_chars_weighted: f64,
+    commas: usize,
+    p_count: usize,
+    img_count: usize,
+    li_count: usize,
+    input_count: usize,
+    embed_count: usize,
+    has_video_embed: bool,
+    inner_text_single: String,
+}
+
+impl CondStats {
+    fn new() -> Self {
+        CondStats {
+            chars: CharCounter::new(),
+            text_chars: CharCounter::new(),
+            list_chars: CharCounter::new(),
+            heading_chars: CharCounter::new(),
+            link_chars_weighted: 0.0,
+            commas: 0,
+            p_count: 0,
+            img_count: 0,
+            li_count: 0,
+            input_count: 0,
+            embed_count: 0,
+            has_video_embed: false,
+            inner_text_single: String::new(),
+        }
+    }
+}
+
+/// Recursive walker for `should_clean_conditionally`.
+///
+/// Mirrors Go's `walk` closure in `cleanConditionally`: accumulates char counts
+/// per element class (text/list/heading) and per-`<a>` link counts.
+///
+/// `link_coeff` is non-zero only when we are inside an `<a>` element.
+/// `link_acc` accumulates chars that belong to the current `<a>` (if any).
+#[allow(clippy::too_many_arguments)]
+fn walk_cond(
+    doc: &Document,
+    n: NodeId,
+    stats: &mut CondStats,
+    in_text: bool,
+    in_list: bool,
+    in_heading: bool,
+    link_coeff: f64,
+    link_acc: &mut CharCounter,
+    in_figcaption: bool,
+    is_video_fn: &dyn Fn(NodeId) -> bool,
+) {
+    match doc.html.tree.get(n).map(|x| x.value()) {
+        Some(Node::Text(text)) => {
+            let old_total = stats.chars.total();
+            for r in text.text.chars() {
+                stats.chars.count(r);
+                if is_comma(r) {
+                    stats.commas += 1;
+                }
+                if in_text {
+                    stats.text_chars.count(r);
+                }
+                if in_list {
+                    stats.list_chars.count(r);
+                }
+                if in_heading {
+                    stats.heading_chars.count(r);
+                }
+                if link_coeff != 0.0 {
+                    link_acc.count(r);
+                }
+            }
+            if stats.chars.total() > old_total {
+                stats.inner_text_single = text.text.to_string();
+            }
+        }
+        Some(Node::Element(_)) => {
+            let tag = doc.tag_name(n);
+            match tag {
+                "p" => stats.p_count += 1,
+                "img" => stats.img_count += 1,
+                "li" => stats.li_count += 1,
+                "input" => stats.input_count += 1,
+                "object" | "embed" | "iframe" => {
+                    stats.embed_count += 1;
+                    if is_video_fn(n) {
+                        stats.has_video_embed = true;
+                    }
+                }
+                _ => {}
+            }
+
+            let new_in_list = in_list || matches!(tag, "ul" | "ol");
+            if !in_list && matches!(tag, "ul" | "ol") {
+                stats.list_chars.reset_context();
+            }
+
+            let new_in_heading =
+                in_heading || matches!(tag, "h1" | "h2" | "h3" | "h4" | "h5" | "h6");
+            if !in_heading && matches!(tag, "h1" | "h2" | "h3" | "h4" | "h5" | "h6") {
+                stats.heading_chars.reset_context();
+            }
+
+            let new_in_text = in_text
+                || matches!(
+                    tag,
+                    "blockquote"
+                        | "dl"
+                        | "div"
+                        | "img"
+                        | "ol"
+                        | "p"
+                        | "pre"
+                        | "table"
+                        | "ul"
+                        | "span"
+                        | "li"
+                        | "td"
+                );
+            if !in_text
+                && matches!(
+                    tag,
+                    "blockquote"
+                        | "dl"
+                        | "div"
+                        | "img"
+                        | "ol"
+                        | "p"
+                        | "pre"
+                        | "table"
+                        | "ul"
+                        | "span"
+                        | "li"
+                        | "td"
+                )
+            {
+                stats.text_chars.reset_context();
+            }
+
+            let new_in_figcaption = in_figcaption || tag == "figcaption";
+
+            if tag == "a" && !in_figcaption {
+                // Each <a> gets its own fresh link counter (port of Go's per-a cc).
+                let coeff = {
+                    let href = doc.attr(n, "href").unwrap_or("").trim().to_string();
+                    if href.len() > 1 && href.starts_with('#') {
+                        0.3
+                    } else {
+                        1.0
+                    }
+                };
+                let mut my_acc = CharCounter::new();
+                for child in doc.child_nodes(n) {
+                    walk_cond(
+                        doc,
+                        child,
+                        stats,
+                        new_in_text,
+                        new_in_list,
+                        new_in_heading,
+                        coeff,
+                        &mut my_acc,
+                        new_in_figcaption,
+                        is_video_fn,
+                    );
+                }
+                stats.link_chars_weighted += my_acc.total() as f64 * coeff;
+            } else {
+                for child in doc.child_nodes(n) {
+                    walk_cond(
+                        doc,
+                        child,
+                        stats,
+                        new_in_text,
+                        new_in_list,
+                        new_in_heading,
+                        link_coeff,
+                        link_acc,
+                        new_in_figcaption,
+                        is_video_fn,
+                    );
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Scan direct children (and their descendants) for data-table structural signals.
+///
+/// Returns `(is_data_table, is_conclusive)`.
+fn scan_for_data_table_signals(doc: &Document, n: NodeId) -> (bool, bool) {
+    let Some(node) = doc.html.tree.get(n) else {
+        return (false, false);
+    };
+    for child in node.children() {
+        if let Node::Element(el) = child.value() {
+            match el.name() {
+                "col" | "colgroup" | "tfoot" | "thead" | "th" => {
+                    return (true, true);
+                }
+                "caption" => {
+                    if child.has_children() {
+                        return (true, true);
+                    }
+                }
+                "table" => {
+                    return (false, true);
+                }
+                _ => {}
+            }
+        }
+        let (result, conclusive) = scan_for_data_table_signals(doc, child.id());
+        if conclusive {
+            return (result, conclusive);
+        }
+    }
+    (false, false)
+}
+
+/// Return the last child of any type (text, element, comment…).
+fn last_child_node(doc: &Document, id: NodeId) -> Option<NodeId> {
+    doc.html.tree.get(id)?.last_child().map(|n| n.id())
+}
+
+/// Deep-clone a node into the same tree and return the new NodeId.
+///
+/// Handles element nodes (recursively cloning children) and text nodes.
+fn clone_node(doc: &mut Document, id: NodeId) -> NodeId {
+    match doc.html.tree.get(id).map(|n| n.value().clone()) {
+        Some(Node::Element(el)) => {
+            let new_name = el.name.clone();
+            let attrs: Vec<_> = el
+                .attrs
+                .iter()
+                .map(|(k, v)| html5ever::Attribute {
+                    name: k.clone(),
+                    value: v.clone(),
+                })
+                .collect();
+            let new_el =
+                scraper::node::Element::new(new_name, attrs);
+            let new_id = doc.html.tree.orphan(Node::Element(new_el)).id();
+            // Clone children.
+            let children: Vec<NodeId> = doc.child_nodes(id);
+            for child in children {
+                let child_clone = clone_node(doc, child);
+                doc.append_child(new_id, child_clone);
+            }
+            new_id
+        }
+        Some(Node::Text(t)) => {
+            let text_val = t.text.as_ref().to_string();
+            doc.create_text_node(&text_val)
+        }
+        _ => {
+            // For other node types (comments, etc.), create an empty text node as a fallback.
+            doc.create_text_node("")
+        }
+    }
+}
+
+/// True if this node or any descendant has useful content (images, embeds, or text).
+///
+/// Port of the inline `findContent` closure in Go's `prepArticle`.
+fn find_content_in_node(doc: &Document, id: NodeId) -> bool {
+    let Some(node) = doc.html.tree.get(id) else {
+        return false;
+    };
+    match node.value() {
+        Node::Element(el) => {
+            match el.name() {
+                "img" | "picture" | "embed" | "object" | "iframe" => return true,
+                _ => {}
+            }
+        }
+        Node::Text(_) => {
+            if has_text_content(doc, id) {
+                return true;
+            }
+        }
+        _ => {}
+    }
+    for child in node.children() {
+        if find_content_in_node(doc, child.id()) {
+            return true;
+        }
+    }
+    false
+}
 
 /// Port of `isSingleImage` as a free function operating on any Document.
 fn is_single_image_in(doc: &Document, id: NodeId) -> bool {

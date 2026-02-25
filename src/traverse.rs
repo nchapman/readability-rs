@@ -74,14 +74,14 @@ fn walk_text<F: FnMut(&str)>(doc: &Document, id: NodeId, f: &mut F) {
 /// - Leading whitespace: ignored (not counted until the first non-space character).
 /// - Trailing whitespace: ignored (the pending space is never flushed at end).
 /// - Consecutive spaces: counted as one.
-struct CharCounter {
+pub(crate) struct CharCounter {
     total: usize,
     last_was_space: bool,
     seen_non_space: bool,
 }
 
 impl CharCounter {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         CharCounter {
             total: 0,
             last_was_space: false,
@@ -90,7 +90,7 @@ impl CharCounter {
     }
 
     /// Port of charCounter.Count(r rune)
-    fn count(&mut self, r: char) {
+    pub(crate) fn count(&mut self, r: char) {
         if r.is_whitespace() {
             self.last_was_space = true;
             return;
@@ -105,15 +105,14 @@ impl CharCounter {
         self.seen_non_space = true;
     }
 
-    fn total(&self) -> usize {
+    pub(crate) fn total(&self) -> usize {
         self.total
     }
 
     /// Port of charCounter.ResetContext — reset word-boundary tracking without
     /// clearing the running total. Used in `clean_conditionally` to restart
     /// per-element context while keeping the accumulated global count.
-    #[allow(dead_code)] // used in clean_conditionally (Phase 7)
-    pub fn reset_context(&mut self) {
+    pub(crate) fn reset_context(&mut self) {
         self.last_was_space = false;
         self.seen_non_space = false;
     }
@@ -123,7 +122,7 @@ impl CharCounter {
 ///
 /// Covers commas as used in Latin, Sindhi, Chinese and various other scripts.
 /// See: https://en.wikipedia.org/wiki/Comma#Comma_variants
-fn is_comma(r: char) -> bool {
+pub(crate) fn is_comma(r: char) -> bool {
     matches!(
         r,
         '\u{002C}' // COMMA (,)
