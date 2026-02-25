@@ -503,6 +503,34 @@ impl Document {
             .unwrap_or(false)
     }
 
+    /// Return all attributes of an element as owned `(name, value)` pairs.
+    pub fn get_all_attrs(&self, id: NodeId) -> Vec<(String, String)> {
+        self.html
+            .tree
+            .get(id)
+            .and_then(|n| n.value().as_element())
+            .map(|el| {
+                el.attrs
+                    .iter()
+                    .map(|(k, v)| (k.local.as_ref().to_string(), v.as_ref().to_string()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Rename an element's tag in-place without creating a new node or changing the NodeId.
+    ///
+    /// Unlike `set_tag_name` (which creates a new element and returns a new NodeId),
+    /// this directly mutates the element's `QualName.local` so the NodeId stays stable.
+    /// Use this when the caller needs the NodeId to remain valid after the rename.
+    pub fn rename_tag(&mut self, id: NodeId, new_tag: &str) {
+        if let Some(mut node) = self.html.tree.get_mut(id) {
+            if let Node::Element(ref mut el) = *node.value() {
+                el.name = QualName::new(None, ns!(html), LocalName::from(new_tag));
+            }
+        }
+    }
+
     /// True if the node has any element children.
     pub fn has_children(&self, id: NodeId) -> bool {
         self.html
