@@ -201,7 +201,8 @@ impl Parser {
 
             let node_text = doc.text_content(node);
             let node_text = node_text.trim();
-            let len = node_text.chars().count();
+            // Go uses len() (UTF-8 byte count), not Unicode codepoint count.
+            let len = node_text.len();
             if len < 140 {
                 continue;
             }
@@ -1336,8 +1337,9 @@ impl Parser {
                     let first_colon = orig_title.find(':').map(|i| i + 1).unwrap_or(0);
                     cur_title = orig_title[first_colon..].to_string();
                 } else {
+                    // Port of strings.Index(origTitle, ":") — bare colon, not colon-space.
                     let pre_colon_words = orig_title
-                        .find(": ")
+                        .find(':')
                         .map(|i| word_count(&orig_title[..i]))
                         .unwrap_or(0);
                     if pre_colon_words > 5 {
@@ -1358,8 +1360,12 @@ impl Parser {
         let cur_word_count = word_count(&cur_title);
         let tmp_orig = RX_TITLE_ANY_SEPARATOR.replace_all(&orig_title, "").into_owned();
 
+        // Go uses signed integer subtraction: wordCount(tmpOrig) - 1 can be -1 when
+        // wordCount is 0 (purely separator titles), which is always != any usize word count.
+        // Mirror that by casting to i64.
         if cur_word_count <= 4
-            && (!had_hierarchical_sep || cur_word_count != word_count(&tmp_orig).saturating_sub(1))
+            && (!had_hierarchical_sep
+                || cur_word_count as i64 != word_count(&tmp_orig) as i64 - 1)
         {
             cur_title = orig_title;
         }
@@ -1388,43 +1394,38 @@ impl Parser {
             };
 
             // Find the right object (may be an array of items, or a @graph, or a direct object).
-            // Go only validates @context for the top-level Object case, not for Array items.
-            let (obj, validate_context) = match parsed {
+            let obj: &serde_json::Map<String, serde_json::Value> = match parsed {
                 serde_json::Value::Array(ref arr) => {
-                    let found = arr.iter()
+                    match arr.iter()
                         .find(|item| {
                             item.get("@type")
                                 .and_then(|t| t.as_str())
                                 .map(|t| RX_JSON_LD_ARTICLE_TYPES.is_match(t))
                                 .unwrap_or(false)
                         })
-                        .and_then(|v| v.as_object());
-                    (found, false) // Go skips @context check for array items
+                        .and_then(|v| v.as_object())
+                    {
+                        Some(o) => o,
+                        None => continue,
+                    }
                 }
-                serde_json::Value::Object(ref m) => (Some(m), true),
+                serde_json::Value::Object(ref m) => m,
                 _ => continue,
             };
 
-            let obj = match obj {
-                Some(o) => o,
-                None => continue,
-            };
-
-            // Validate @context is schema.org (only for top-level Object, not array items).
-            if validate_context {
-                let context_ok = match obj.get("@context") {
-                    Some(serde_json::Value::String(s)) => RX_SCHEMA_ORG.is_match(s),
-                    Some(serde_json::Value::Object(m)) => {
-                        m.get("@vocab")
-                            .and_then(|v| v.as_str())
-                            .map(|s| RX_SCHEMA_ORG.is_match(s))
-                            .unwrap_or(false)
-                    }
-                    _ => false,
-                };
-                if !context_ok {
-                    continue;
+            // Validate @context is schema.org (always, for both array items and top-level objects).
+            let context_ok = match obj.get("@context") {
+                Some(serde_json::Value::String(s)) => RX_SCHEMA_ORG.is_match(s),
+                Some(serde_json::Value::Object(m)) => {
+                    m.get("@vocab")
+                        .and_then(|v| v.as_str())
+                        .map(|s| RX_SCHEMA_ORG.is_match(s))
+                        .unwrap_or(false)
                 }
+                _ => false,
+            };
+            if !context_ok {
+                continue;
             }
 
             // If no @type, look in @graph for an article type.
@@ -2783,14 +2784,17 @@ fn walk_cond(
                 _ => {}
             }
 
+            // Go's walk resets context unconditionally on every entry into these element
+            // types, even when already inside a nested one (e.g., a ul inside a ul). This
+            // matches Go's ResetContext() call which is outside any "already in list" guard.
             let new_in_list = in_list || matches!(tag, "ul" | "ol");
-            if !in_list && matches!(tag, "ul" | "ol") {
+            if matches!(tag, "ul" | "ol") {
                 stats.list_chars.reset_context();
             }
 
             let new_in_heading =
                 in_heading || matches!(tag, "h1" | "h2" | "h3" | "h4" | "h5" | "h6");
-            if !in_heading && matches!(tag, "h1" | "h2" | "h3" | "h4" | "h5" | "h6") {
+            if matches!(tag, "h1" | "h2" | "h3" | "h4" | "h5" | "h6") {
                 stats.heading_chars.reset_context();
             }
 
@@ -2810,23 +2814,21 @@ fn walk_cond(
                         | "li"
                         | "td"
                 );
-            if !in_text
-                && matches!(
-                    tag,
-                    "blockquote"
-                        | "dl"
-                        | "div"
-                        | "img"
-                        | "ol"
-                        | "p"
-                        | "pre"
-                        | "table"
-                        | "ul"
-                        | "span"
-                        | "li"
-                        | "td"
-                )
-            {
+            if matches!(
+                tag,
+                "blockquote"
+                    | "dl"
+                    | "div"
+                    | "img"
+                    | "ol"
+                    | "p"
+                    | "pre"
+                    | "table"
+                    | "ul"
+                    | "span"
+                    | "li"
+                    | "td"
+            ) {
                 stats.text_chars.reset_context();
             }
 

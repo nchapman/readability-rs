@@ -26,11 +26,13 @@ pub fn has_content(s: &str) -> bool {
     s.chars().any(|c| !c.is_whitespace())
 }
 
-/// Port of isValidURL — true if the string is a valid **absolute** URL (scheme + host).
+/// Port of isValidURL — true if the string is a parseable absolute URI with a scheme.
 ///
-/// Go uses `url.ParseRequestURI` which rejects relative paths; we mirror that.
+/// Go's `url.ParseRequestURI` rejects relative paths (no scheme) but accepts any URI
+/// with a valid scheme, including those without a host (e.g. `file:///path`). We match
+/// that by requiring only that `Url::parse` succeeds (which also rejects relative paths).
 pub fn is_valid_url(s: &str) -> bool {
-    Url::parse(s).map(|u| u.has_host()).unwrap_or(false)
+    Url::parse(s).is_ok()
 }
 
 /// Port of toAbsoluteURI — resolve `uri` against `base` into an absolute URL string.
@@ -95,28 +97,49 @@ pub fn str_or<'a>(candidates: &[&'a str]) -> &'a str {
     candidates.iter().copied().find(|s| !s.is_empty()).unwrap_or("")
 }
 
-/// Port of textSimilarity — token-based similarity between two strings in `[0.0, 1.0]`.
+/// Port of textSimilarity — character-count-based similarity in `[0.0, 1.0]`.
 ///
-/// Tokenizes using `\W+` (same as Go's `rxTokenize`), then computes
-/// `|intersection(tokens_a, tokens_b)| / max(|tokens_a|, |tokens_b|)`.
-/// Returns `0.0` when both strings are empty.
+/// Lowercases both inputs (matching Go's `strings.ToLower`), tokenizes using
+/// `rxTokenize`, then computes `1 - charCount(unique_B) / charCount(B)` where
+/// `unique_B` is the tokens in B that do not appear in A. Returns `0.0` when B
+/// is empty.
+///
+/// Go's algorithm differs from Jaccard: it is character-count-based so that long
+/// shared words contribute more than short ones. Two tokens joined with a space
+/// count the join space, mirroring `strings.Join(tokens, " ")`.
 pub fn text_similarity(a: &str, b: &str) -> f64 {
+    let a_lower = a.to_lowercase();
+    let b_lower = b.to_lowercase();
+
     let tokens_a: std::collections::HashSet<&str> = RX_TOKENIZE
-        .split(a)
+        .split(&a_lower)
         .filter(|s| !s.is_empty())
         .collect();
-    let tokens_b: std::collections::HashSet<&str> = RX_TOKENIZE
-        .split(b)
+    let tokens_b: Vec<&str> = RX_TOKENIZE
+        .split(&b_lower)
         .filter(|s| !s.is_empty())
         .collect();
 
-    let max_len = tokens_a.len().max(tokens_b.len());
-    if max_len == 0 {
+    // charCount of strings.Join(tokens_b, " ")
+    let merged_b_len: usize = tokens_b.iter().map(|t| t.chars().count()).sum::<usize>()
+        + tokens_b.len().saturating_sub(1);
+
+    if merged_b_len == 0 {
         return 0.0;
     }
 
-    let intersection = tokens_a.intersection(&tokens_b).count();
-    intersection as f64 / max_len as f64
+    // tokens in B that are NOT in A
+    let unique_b: Vec<&str> = tokens_b
+        .iter()
+        .copied()
+        .filter(|t| !tokens_a.contains(t))
+        .collect();
+
+    // charCount of strings.Join(unique_b, " ")
+    let unique_b_len: usize = unique_b.iter().map(|t| t.chars().count()).sum::<usize>()
+        + unique_b.len().saturating_sub(1);
+
+    1.0 - unique_b_len as f64 / merged_b_len as f64
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -157,17 +180,17 @@ mod tests {
     }
 
     #[test]
-    fn is_valid_url_requires_scheme_and_host() {
-        // Absolute URLs with scheme + host are valid
+    fn is_valid_url_matches_go_parse_request_uri() {
+        // Absolute URLs with scheme are valid (Go's ParseRequestURI accepts them).
         assert!(is_valid_url("https://www.example.com/path"));
         assert!(is_valid_url("http://localhost:8080/"));
         assert!(is_valid_url("ftp://ftp.example.com/file.txt"));
-        // Relative paths must be rejected (Go's ParseRequestURI rejects them)
+        // file:/// has no host but Go's ParseRequestURI accepts it — so do we.
+        assert!(is_valid_url("file:///etc/passwd"));
+        // Relative paths have no scheme → rejected by both Go and Rust.
         assert!(!is_valid_url("/authors/jane"));
         assert!(!is_valid_url("relative/path"));
         assert!(!is_valid_url(""));
-        // Scheme-only (no host) is also rejected
-        assert!(!is_valid_url("file:///etc/passwd"));
     }
 
     #[test]
@@ -247,17 +270,34 @@ mod tests {
     }
 
     #[test]
+    fn text_similarity_case_insensitive() {
+        // Go lowercases before comparing, so different case = identical.
+        assert_eq!(text_similarity("Hello World", "hello world"), 1.0);
+        assert_eq!(text_similarity("HELLO WORLD", "hello world"), 1.0);
+    }
+
+    #[test]
     fn text_similarity_disjoint_is_zero() {
         assert_eq!(text_similarity("foo bar", "baz qux"), 0.0);
     }
 
     #[test]
     fn text_similarity_partial() {
-        // "hello world" and "hello earth" share "hello" → 1/2 = 0.5
+        // tokens_b = ["hello", "earth"], unique_b (not in A) = ["earth"]
+        // merged_b_len = len("hello earth") = 11
+        // unique_b_len = len("earth") = 5
+        // similarity = 1 - 5/11 ≈ 0.545
         let sim = text_similarity("hello world", "hello earth");
+        let expected = 1.0 - 5.0_f64 / 11.0;
         assert!(
-            (sim - 0.5).abs() < 1e-9,
-            "expected ~0.5, got {sim}"
+            (sim - expected).abs() < 1e-9,
+            "expected ~{expected:.4}, got {sim}"
         );
+    }
+
+    #[test]
+    fn text_similarity_b_subset_of_a() {
+        // All tokens in B are in A → unique_b = [] → similarity = 1.0
+        assert_eq!(text_similarity("hello world today", "hello world"), 1.0);
     }
 }

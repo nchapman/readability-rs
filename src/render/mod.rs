@@ -49,7 +49,7 @@ fn render(doc: &Document, id: NodeId, keep_whitespace: bool, tb: &mut InnerTextB
                     // MathJax 2: <script type="math/tex; mode=display">…</script>
                     if let Some((is_ok, is_block)) = is_mathjax_script(el) {
                         if is_ok {
-                            let content = script_text_content(doc, id);
+                            let content = direct_text_content(doc, id);
                             render_tex(&content, is_block, tb);
                         }
                     }
@@ -58,11 +58,13 @@ fn render(doc: &Document, id: NodeId, keep_whitespace: bool, tb: &mut InnerTextB
 
                 "math" => {
                     // MathML: look for <annotation encoding="application/x-tex">
+                    // Go's textContent collects only direct text-node children (not recursive),
+                    // so mirror that with direct_text_content rather than the deep collector.
                     let is_block = el.attr("display") == Some("block");
                     if let Some(annotation_id) =
                         find_annotation(doc, id, "application/x-tex")
                     {
-                        let content = doc.text_content(annotation_id);
+                        let content = direct_text_content(doc, annotation_id);
                         render_tex(&content, is_block, tb);
                     }
                     return;
@@ -179,8 +181,12 @@ fn is_mathjax_script(el: &scraper::node::Element) -> Option<(bool, bool)> {
     Some((true, is_block))
 }
 
-/// Get the direct text content of a `<script>` element (concatenation of text children).
-fn script_text_content(doc: &Document, id: NodeId) -> String {
+/// Port of Go's `textContent` — concatenates only the direct text-node children of `id`.
+///
+/// This is intentionally shallow (not recursive), mirroring Go's `textContent` which
+/// only reads `node.FirstChild` text nodes at one level deep. Used for `<script>` MathJax
+/// content and `<annotation>` MathML content where nesting is never expected.
+fn direct_text_content(doc: &Document, id: NodeId) -> String {
     doc.child_nodes(id)
         .into_iter()
         .filter_map(|cid| {
@@ -213,12 +219,17 @@ fn find_annotation(doc: &Document, id: NodeId, mime_type: &str) -> Option<NodeId
 }
 
 /// Port of findLatex — DFS search for `data-latex` attribute in element descendants.
+///
+/// Returns `None` for empty `data-latex` values, mirroring Go's caller guard
+/// `if tex := findLatex(n); tex != ""`.
 fn find_latex(doc: &Document, id: NodeId) -> Option<String> {
     let node = doc.html.tree.get(id)?;
     for child in node.children() {
         if let Node::Element(el) = child.value() {
             if let Some(val) = el.attr("data-latex") {
-                return Some(val.to_string());
+                if !val.is_empty() {
+                    return Some(val.to_string());
+                }
             }
             if let Some(found) = find_latex(doc, child.id()) {
                 return Some(found);
