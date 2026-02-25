@@ -1,0 +1,42 @@
+[package]
+name = "readability"
+version = "0.1.0"
+edition = "2021"
+description = "Rust port of go-readability — extract readable content from HTML"
+license = "Apache-2.0"
+
+[lib]
+name = "readability"
+
+[dependencies]
+# HTML parsing + CSS selectors (html5ever-based, spec-compliant)
+scraper = "0.22"
+ego-tree = "0.10"
+
+# Regex (RE2-compatible, linear time — same engine family as go-readability's re2go patterns)
+regex = "1"
+
+# URL parsing/resolution (used in fixRelativeURIs)
+url = "2"
+
+# JSON-LD metadata parsing
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Date parsing (port of go-readability's araddon/dateparse dependency)
+dateparser = "0.2"
+chrono = { version = "0.4", features = ["serde"] }
+
+# Error types
+thiserror = "2"
+
+# Logging (port of go-readability's slog structured logger)
+tracing = "0.1"
+
+[dev-dependencies]
+pretty_assertions = "1"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "extraction"
+harness = false
