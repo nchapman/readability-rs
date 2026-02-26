@@ -152,7 +152,7 @@ impl Parser {
         let json_ld = if !self.disable_jsonld {
             self.get_jsonld()
         } else {
-            std::collections::HashMap::new()
+            super::metadata::JsonLdMetadata::default()
         };
 
         // Remove script/noscript tags.
@@ -163,8 +163,8 @@ impl Parser {
 
         // Extract metadata.
         let metadata = self.get_article_metadata(&json_ld);
-        self.article_title = metadata.get("title").cloned().unwrap_or_default();
-        self.article_byline = metadata.get("byline").cloned().unwrap_or_default();
+        self.article_title = metadata.title.clone();
+        self.article_byline = metadata.byline.clone();
 
         // Grab article content.
         let article_content = self.grab_article();
@@ -196,7 +196,7 @@ impl Parser {
 
         // Excerpt fallback: if metadata has no excerpt, use InnerText of the first <p>
         // in the article content. Port of Go's `article.Excerpt()` lazy fallback.
-        let excerpt_meta = metadata.get("excerpt").cloned().unwrap_or_default();
+        let excerpt_meta = metadata.excerpt.clone();
         let excerpt = if excerpt_meta.is_empty() {
             // Find the first <p> inside the readable node.
             let readable_for_excerpt =
@@ -222,12 +222,12 @@ impl Parser {
             title: self.article_title.clone(),
             byline: self.article_byline.clone(),
             excerpt,
-            site_name: metadata.get("siteName").cloned().unwrap_or_default(),
-            image: metadata.get("image").cloned().unwrap_or_default(),
-            favicon: metadata.get("favicon").cloned().unwrap_or_default(),
+            site_name: metadata.site_name,
+            image: metadata.image,
+            favicon: metadata.favicon,
             language: self.article_lang.clone(),
-            published_time: metadata.get("publishedTime").cloned().unwrap_or_default(),
-            modified_time: metadata.get("modifiedTime").cloned().unwrap_or_default(),
+            published_time: metadata.published_time,
+            modified_time: metadata.modified_time,
             content,
             text_content,
             length,

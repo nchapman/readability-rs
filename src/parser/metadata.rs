@@ -8,6 +8,32 @@ use crate::utils::{
     char_count, is_valid_url, str_or, text_similarity, to_absolute_uri, word_count,
 };
 
+/// Typed metadata extracted from `<meta>` tags and JSON-LD.
+///
+/// Replaces the previous `HashMap<String, String>` for type safety and clarity.
+#[derive(Debug, Default)]
+pub(crate) struct ArticleMetadata {
+    pub(crate) title: String,
+    pub(crate) byline: String,
+    pub(crate) excerpt: String,
+    pub(crate) site_name: String,
+    pub(crate) image: String,
+    pub(crate) favicon: String,
+    pub(crate) published_time: String,
+    pub(crate) modified_time: String,
+}
+
+/// Typed metadata extracted from JSON-LD `<script>` tags.
+#[derive(Debug, Default)]
+pub(super) struct JsonLdMetadata {
+    pub(super) title: String,
+    pub(super) byline: String,
+    pub(super) excerpt: String,
+    pub(super) site_name: String,
+    pub(super) date_published: String,
+    pub(super) date_modified: String,
+}
+
 impl Parser {
     // ── Metadata extraction ───────────────────────────────────────────────
 
@@ -87,8 +113,8 @@ impl Parser {
     }
 
     /// Port of `getJSONLD` — extract Schema.org metadata from `<script type="application/ld+json">`.
-    pub(super) fn get_jsonld(&self) -> HashMap<String, String> {
-        let mut metadata: Option<HashMap<String, String>> = None;
+    pub(super) fn get_jsonld(&self) -> JsonLdMetadata {
+        let mut metadata: Option<JsonLdMetadata> = None;
 
         let root = self.doc.root();
         let scripts = self
@@ -178,7 +204,7 @@ impl Parser {
                 continue;
             }
 
-            let mut meta = HashMap::new();
+            let mut meta = JsonLdMetadata::default();
 
             // Title: prefer name/headline whichever better matches HTML title.
             let name = final_obj
@@ -195,16 +221,16 @@ impl Parser {
                     let name_matches = text_similarity(n, &title) > 0.75;
                     let headline_matches = text_similarity(h, &title) > 0.75;
                     if headline_matches && !name_matches {
-                        meta.insert("title".to_string(), h.to_string());
+                        meta.title = h.to_string();
                     } else {
-                        meta.insert("title".to_string(), n.to_string());
+                        meta.title = n.to_string();
                     }
                 }
                 (Some(n), _) => {
-                    meta.insert("title".to_string(), n.to_string());
+                    meta.title = n.to_string();
                 }
                 (_, Some(h)) => {
-                    meta.insert("title".to_string(), h.to_string());
+                    meta.title = h.to_string();
                 }
                 _ => {}
             }
@@ -213,7 +239,7 @@ impl Parser {
             match final_obj.get("author") {
                 Some(serde_json::Value::Object(a)) => {
                     if let Some(n) = a.get("name").and_then(|v| v.as_str()) {
-                        meta.insert("byline".to_string(), n.trim().to_string());
+                        meta.byline = n.trim().to_string();
                     }
                 }
                 Some(serde_json::Value::Array(arr)) => {
@@ -222,14 +248,14 @@ impl Parser {
                         .filter_map(|a| a.get("name")?.as_str())
                         .map(|s| s.trim().to_string())
                         .collect();
-                    meta.insert("byline".to_string(), authors.join(", "));
+                    meta.byline = authors.join(", ");
                 }
                 _ => {}
             }
 
             // Description / excerpt.
             if let Some(desc) = final_obj.get("description").and_then(|v| v.as_str()) {
-                meta.insert("excerpt".to_string(), desc.trim().to_string());
+                meta.excerpt = desc.trim().to_string();
             }
 
             // Publisher / site name.
@@ -238,12 +264,12 @@ impl Parser {
                 .and_then(|p| p.get("name"))
                 .and_then(|n| n.as_str())
             {
-                meta.insert("siteName".to_string(), pub_name.trim().to_string());
+                meta.site_name = pub_name.trim().to_string();
             }
 
             // Date published.
             if let Some(dp) = final_obj.get("datePublished").and_then(|v| v.as_str()) {
-                meta.insert("datePublished".to_string(), dp.to_string());
+                meta.date_published = dp.to_string();
             }
 
             metadata = Some(meta);
@@ -251,6 +277,7 @@ impl Parser {
 
         metadata.unwrap_or_default()
     }
+
 
     /// Port of `getArticleFavicon` — find the best PNG favicon from `<link>` elements.
     pub(super) fn get_article_favicon(&self) -> String {
@@ -304,10 +331,7 @@ impl Parser {
     }
 
     /// Port of `getArticleMetadata` — collect metadata from `<meta>` tags and JSON-LD.
-    pub(super) fn get_article_metadata(
-        &self,
-        json_ld: &HashMap<String, String>,
-    ) -> HashMap<String, String> {
+    pub(super) fn get_article_metadata(&self, json_ld: &JsonLdMetadata) -> ArticleMetadata {
         let root = self.doc.root();
         let metas = self.doc.get_elements_by_tag_name(root, "meta");
         let mut values: HashMap<String, String> = HashMap::new();
@@ -347,15 +371,13 @@ impl Parser {
         }
 
         let empty = String::new();
-        let jl = json_ld;
 
         // Build a helper to look up in values map with fallback to empty.
         let v = |key: &str| values.get(key).unwrap_or(&empty).as_str();
-        let j = |key: &str| jl.get(key).map(|s| s.as_str()).unwrap_or("");
 
         let metadata_title = {
             let t = str_or(&[
-                j("title"),
+                &json_ld.title,
                 v("dc:title"),
                 v("dcterm:title"),
                 v("og:title"),
@@ -374,7 +396,7 @@ impl Parser {
 
         let metadata_byline = {
             let b = str_or(&[
-                j("byline"),
+                &json_ld.byline,
                 v("dc:creator"),
                 v("dcterm:creator"),
                 v("author"),
@@ -393,7 +415,7 @@ impl Parser {
         };
 
         let metadata_excerpt = str_or(&[
-            j("excerpt"),
+            &json_ld.excerpt,
             v("dc:description"),
             v("dcterm:description"),
             v("og:description"),
@@ -404,14 +426,14 @@ impl Parser {
         ])
         .to_string();
 
-        let metadata_site_name = str_or(&[j("siteName"), v("og:site_name")]).to_string();
+        let metadata_site_name = str_or(&[&json_ld.site_name, v("og:site_name")]).to_string();
 
         let metadata_image = str_or(&[v("og:image"), v("image"), v("twitter:image")]).to_string();
 
         let metadata_favicon = self.get_article_favicon();
 
         let metadata_published_time = str_or(&[
-            j("datePublished"),
+            &json_ld.date_published,
             v("article:published_time"),
             v("dcterms.available"),
             v("dcterms.created"),
@@ -422,29 +444,22 @@ impl Parser {
         .to_string();
 
         let metadata_modified_time = str_or(&[
-            j("dateModified"),
+            &json_ld.date_modified,
             v("article:modified_time"),
             v("dcterms.modified"),
         ])
         .to_string();
 
-        // HTML-unescape field values (in case of double-encoded entities in meta tags).
-        let mut result = HashMap::new();
-        result.insert("title".to_string(), html_unescape(&metadata_title));
-        result.insert("byline".to_string(), html_unescape(&metadata_byline));
-        result.insert("excerpt".to_string(), html_unescape(&metadata_excerpt));
-        result.insert("siteName".to_string(), html_unescape(&metadata_site_name));
-        result.insert("image".to_string(), metadata_image);
-        result.insert("favicon".to_string(), metadata_favicon);
-        result.insert(
-            "publishedTime".to_string(),
-            html_unescape(&metadata_published_time),
-        );
-        result.insert(
-            "modifiedTime".to_string(),
-            html_unescape(&metadata_modified_time),
-        );
-        result
+        ArticleMetadata {
+            title: html_unescape(&metadata_title),
+            byline: html_unescape(&metadata_byline),
+            excerpt: html_unescape(&metadata_excerpt),
+            site_name: html_unescape(&metadata_site_name),
+            image: metadata_image,
+            favicon: metadata_favicon,
+            published_time: html_unescape(&metadata_published_time),
+            modified_time: html_unescape(&metadata_modified_time),
+        }
     }
 }
 

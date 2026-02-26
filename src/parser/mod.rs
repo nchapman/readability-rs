@@ -188,6 +188,56 @@ impl Parser {
             attempts: Vec::new(),
         }
     }
+
+    // ── Chainable builder methods ──────────────────────────────────────────
+
+    /// Set the maximum number of DOM elements to parse. 0 = unlimited.
+    pub fn max_elems_to_parse(mut self, n: usize) -> Self {
+        self.max_elems_to_parse = n;
+        self
+    }
+
+    /// Set the number of top candidates to compare during scoring.
+    pub fn n_top_candidates(mut self, n: usize) -> Self {
+        self.n_top_candidates = n;
+        self
+    }
+
+    /// Set the minimum character count for accepted article content.
+    pub fn char_threshold(mut self, n: usize) -> Self {
+        self.char_threshold = n;
+        self
+    }
+
+    /// Set CSS class names to preserve when `keep_classes` is false.
+    pub fn classes_to_preserve(mut self, classes: Vec<String>) -> Self {
+        self.classes_to_preserve = classes;
+        self
+    }
+
+    /// If true, keep all class attributes on extracted content.
+    pub fn keep_classes(mut self, keep: bool) -> Self {
+        self.keep_classes = keep;
+        self
+    }
+
+    /// Set tag names eligible for content scoring.
+    pub fn tags_to_score(mut self, tags: Vec<String>) -> Self {
+        self.tags_to_score = tags;
+        self
+    }
+
+    /// Disable JSON-LD metadata extraction.
+    pub fn disable_jsonld(mut self, disable: bool) -> Self {
+        self.disable_jsonld = disable;
+        self
+    }
+
+    /// Set a regex for video URLs to allow during cleaning.
+    pub fn allowed_video_regex(mut self, re: regex::Regex) -> Self {
+        self.allowed_video_regex = Some(re);
+        self
+    }
 }
 
 // ── Default ───────────────────────────────────────────────────────────────────
