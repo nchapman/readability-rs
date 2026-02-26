@@ -349,6 +349,13 @@ impl Document {
         let Ok(sel) = Selector::parse(selector) else {
             return Vec::new();
         };
+
+        // Fast path: when scoped to the root, every match is a descendant —
+        // skip the HashSet allocation entirely.
+        if id == self.root() {
+            return self.html.select(&sel).map(|el| el.id()).collect();
+        }
+
         // Collect the set of all descendant NodeIds for filtering (excluding `id` itself).
         let desc_set: std::collections::HashSet<NodeId> = self
             .html

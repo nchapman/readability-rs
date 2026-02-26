@@ -70,6 +70,10 @@ const PRESENTATIONAL_ATTRS: &[&str] = &[
 
 const DEPRECATED_SIZE_ATTR_ELEMS: &[&str] = &["table", "th", "td", "hr", "pre"];
 
+/// Maximum recursion depth for tree-walking helpers to avoid stack overflow on
+/// pathologically nested documents.
+const MAX_TREE_DEPTH: usize = 200;
+
 // ── Internal structs ──────────────────────────────────────────────────────────
 
 /// Port of `flags` — controls which phases of the algorithm are active.
@@ -290,6 +294,11 @@ impl Parser {
 
     /// Port of `ParseAndMutate` — main entry point; mutates `doc` in place during parsing.
     pub(crate) fn parse_and_mutate(&mut self, doc: Document, page_url: Option<&Url>) -> Result {
+        // Clamp n_top_candidates to at least 1 to avoid meaningless results.
+        if self.n_top_candidates == 0 {
+            self.n_top_candidates = 1;
+        }
+
         // Reset per-parse state.
         self.doc = doc;
         self.document_uri = page_url.cloned();
@@ -581,9 +590,16 @@ impl Parser {
 
     /// Port of `hasChildBlockElement` — true if any child is a block-level element.
     fn has_child_block_element(&self, id: NodeId) -> bool {
+        self.has_child_block_element_inner(id, 0)
+    }
+
+    fn has_child_block_element_inner(&self, id: NodeId, depth: usize) -> bool {
+        if depth >= MAX_TREE_DEPTH {
+            return false;
+        }
         self.doc.child_nodes(id).iter().any(|&c| {
             let tag = self.doc.tag_name(c);
-            DIV_TO_P_ELEMS.contains(&tag) || self.has_child_block_element(c)
+            DIV_TO_P_ELEMS.contains(&tag) || self.has_child_block_element_inner(c, depth + 1)
         })
     }
 
@@ -750,10 +766,13 @@ impl Parser {
     /// Port of `removeComments` — remove all HTML comment nodes.
     fn remove_comments(&mut self) {
         let root = self.doc.root();
-        self.remove_comments_from(root);
+        self.remove_comments_from(root, 0);
     }
 
-    fn remove_comments_from(&mut self, id: NodeId) {
+    fn remove_comments_from(&mut self, id: NodeId, depth: usize) {
+        if depth >= MAX_TREE_DEPTH {
+            return;
+        }
         let children: Vec<NodeId> = self.doc.child_nodes(id);
         for child in children {
             if matches!(
@@ -762,7 +781,7 @@ impl Parser {
             ) {
                 self.doc.remove(child);
             } else {
-                self.remove_comments_from(child);
+                self.remove_comments_from(child, depth + 1);
             }
         }
     }
@@ -1203,10 +1222,13 @@ impl Parser {
     /// Port of `cleanClasses` — strip class attributes, preserving `classes_to_preserve`.
     fn clean_classes(&mut self, id: NodeId) {
         let preserve: HashSet<String> = self.classes_to_preserve.iter().cloned().collect();
-        self.clean_classes_impl(id, &preserve);
+        self.clean_classes_impl(id, &preserve, 0);
     }
 
-    fn clean_classes_impl(&mut self, id: NodeId, preserve: &HashSet<String>) {
+    fn clean_classes_impl(&mut self, id: NodeId, preserve: &HashSet<String>, depth: usize) {
+        if depth >= MAX_TREE_DEPTH {
+            return;
+        }
         if self.doc.is_element(id) {
             if let Some(cls) = self.doc.attr(id, "class") {
                 let kept: Vec<&str> = cls
@@ -1222,7 +1244,7 @@ impl Parser {
             }
         }
         for child in self.doc.child_nodes(id) {
-            self.clean_classes_impl(child, preserve);
+            self.clean_classes_impl(child, preserve, depth + 1);
         }
     }
 
@@ -1341,8 +1363,9 @@ impl Parser {
                 if self.has_single_tag_inside_element(n, "div")
                     || self.has_single_tag_inside_element(n, "section")
                 {
-                    let child = self.doc.first_element_child(n)
-                        .expect("has_single_tag_inside_element guarantees exactly one element child");
+                    let child = self.doc.first_element_child(n).expect(
+                        "has_single_tag_inside_element guarantees exactly one element child",
+                    );
                     // Copy parent attrs to child.
                     let parent_attrs = self.doc.get_all_attrs(n);
                     for (k, v) in parent_attrs {
@@ -2697,7 +2720,8 @@ impl Parser {
                 }
             }
 
-            let top_candidate = top_candidate.expect("if-branch creates new_div, else-branch inherits from candidates list");
+            let top_candidate = top_candidate
+                .expect("if-branch creates new_div, else-branch inherits from candidates list");
 
             // ── Sibling gathering ─────────────────────────────────────────
             let article_content = self.doc.create_element("div");
