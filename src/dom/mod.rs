@@ -3,21 +3,12 @@
 //
 // Port of go-readability's DOM usage via github.com/go-shiori/dom.
 
-use std::sync::LazyLock;
-
 use ego_tree::NodeId;
 use html5ever::Attribute;
 use markup5ever::{namespace_url, ns, LocalName, QualName};
-use regex::Regex;
 use scraper::{ElementRef, Html, Node, Selector};
 
-pub use ego_tree::NodeId as Id;
-
-// Inline patterns to avoid circular dep on regexp module.
-static RX_DISPLAY_NONE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)display\s*:\s*none").unwrap());
-static RX_VISIBILITY_HIDDEN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)visibility\s*:\s*hidden").unwrap());
+use crate::regexp::{RX_DISPLAY_NONE, RX_VISIBILITY_HIDDEN};
 
 /// DOM wrapper around `scraper::Html` that provides both read and write access.
 ///
@@ -94,12 +85,7 @@ impl Document {
 
     /// Get an attribute value.
     pub fn attr(&self, id: NodeId, name: &str) -> Option<&str> {
-        self.html
-            .tree
-            .get(id)?
-            .value()
-            .as_element()?
-            .attr(name)
+        self.html.tree.get(id)?.value().as_element()?.attr(name)
     }
 
     /// True if the element has the given attribute.
@@ -634,7 +620,9 @@ mod tests {
 
     #[test]
     fn is_hidden_detects_style_and_attr() {
-        let d = doc(r#"<p style="display:none">a</p><p style="visibility:hidden">b</p><p hidden>c</p><p>d</p>"#);
+        let d = doc(
+            r#"<p style="display:none">a</p><p style="visibility:hidden">b</p><p hidden>c</p><p>d</p>"#,
+        );
         let body = d.body().unwrap();
         let kids = d.children(body);
         assert_eq!(kids.len(), 4);
@@ -651,25 +639,6 @@ mod tests {
         let all = d.get_elements_by_tag_name(body, "*");
         // div + p + span = 3
         assert_eq!(all.len(), 3);
-    }
-
-    #[test]
-    fn ars1_caption_credit_tag() {
-        let src = std::fs::read_to_string(
-            "/Users/nchapman/Drive/Code/lessisbetter/readability-rs/test-pages/ars-1/source.html"
-        ).unwrap();
-        let d = Document::parse(&src);
-        let all = d.get_elements_by_tag_name(d.root(), "*");
-        for &n in &all {
-            let cls = d.attr(n, "class").unwrap_or("").to_string();
-            if cls.contains("caption") {
-                eprintln!("  tag={} class={:?}", d.tag_name(n), cls);
-                // Also print parent's tag
-                if let Some(parent) = d.parent(n) {
-                    eprintln!("    parent: tag={}", d.tag_name(parent));
-                }
-            }
-        }
     }
 
     #[test]

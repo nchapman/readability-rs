@@ -8,44 +8,66 @@ use url::Url;
 
 use crate::article::Article;
 use crate::dom::Document;
-use crate::traverse::{is_comma, CharCounter};
 use crate::error::Error;
 use crate::regexp::*;
 use crate::render::inner_text;
 use crate::traverse::has_text_content;
-use crate::utils::{char_count, is_valid_url, str_or, to_absolute_uri, word_count};
+use crate::traverse::{is_comma, CharCounter};
+use crate::utils::{
+    char_count, is_valid_url, str_or, text_similarity, to_absolute_uri, word_count,
+};
 
 pub type Result<T = Article> = std::result::Result<T, Error>;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-#[allow(dead_code)] // used in Phase 6 (grabArticle / replaceBrs)
 const DIV_TO_P_ELEMS: &[&str] = &[
-    "blockquote", "dl", "div", "img", "ol", "p", "pre", "table", "ul", "select",
+    "blockquote",
+    "dl",
+    "div",
+    "img",
+    "ol",
+    "p",
+    "pre",
+    "table",
+    "ul",
+    "select",
 ];
 
-#[allow(dead_code)] // used in Phase 6 (grabArticle)
 const ALTER_TO_DIV_EXCEPTIONS: &[&str] = &["div", "article", "section", "p", "ol", "ul"];
 
 const PHRASING_ELEMS: &[&str] = &[
-    "abbr", "audio", "b", "bdo", "br", "button", "cite", "code", "data", "datalist", "dfn",
-    "em", "embed", "i", "img", "input", "kbd", "label", "mark", "math", "meter", "noscript",
-    "object", "output", "progress", "q", "ruby", "samp", "script", "select", "small", "span",
-    "strong", "sub", "sup", "textarea", "time", "var", "wbr",
+    "abbr", "audio", "b", "bdo", "br", "button", "cite", "code", "data", "datalist", "dfn", "em",
+    "embed", "i", "img", "input", "kbd", "label", "mark", "math", "meter", "noscript", "object",
+    "output", "progress", "q", "ruby", "samp", "script", "select", "small", "span", "strong",
+    "sub", "sup", "textarea", "time", "var", "wbr",
 ];
 
-#[allow(dead_code)] // used in Phase 6 (grabArticle)
 const UNLIKELY_ROLES: &[&str] = &[
-    "menu", "menubar", "complementary", "navigation", "alert", "alertdialog", "dialog",
+    "menu",
+    "menubar",
+    "complementary",
+    "navigation",
+    "alert",
+    "alertdialog",
+    "dialog",
 ];
 
-#[allow(dead_code)] // used in Phase 6 (cleanStyles via prepArticle)
 const PRESENTATIONAL_ATTRS: &[&str] = &[
-    "align", "background", "bgcolor", "border", "cellpadding", "cellspacing", "frame",
-    "hspace", "rules", "style", "valign", "vspace",
+    "align",
+    "background",
+    "bgcolor",
+    "border",
+    "cellpadding",
+    "cellspacing",
+    "frame",
+    "hspace",
+    "rules",
+    "style",
+    "valign",
+    "vspace",
 ];
 
-#[allow(dead_code)] // used in Phase 6 (cleanStyles via prepArticle)
 const DEPRECATED_SIZE_ATTR_ELEMS: &[&str] = &["table", "th", "td", "hr", "pre"];
 
 // ── Internal structs ──────────────────────────────────────────────────────────
@@ -67,7 +89,11 @@ struct ParseAttempt {
 
 impl Default for Flags {
     fn default() -> Self {
-        Flags { strip_unlikelys: true, use_weight_classes: true, clean_conditionally: true }
+        Flags {
+            strip_unlikelys: true,
+            use_weight_classes: true,
+            clean_conditionally: true,
+        }
     }
 }
 
@@ -75,7 +101,13 @@ impl Default for Flags {
 
 /// Port of `Parser` — the core readability extraction engine.
 ///
-/// Create with `Parser::new()`, then call `parse()` / `parse_document()`.
+/// Create with `Parser::new()`, configure public fields as needed, then call
+/// `parse()` or `parse_document()` to extract an article.
+///
+/// A single `Parser` can be reused for multiple documents — internal state is
+/// fully reset at the start of each parse call. However, `Parser` is **not
+/// thread-safe**: it requires `&mut self` for parsing, so it cannot be shared
+/// across threads without external synchronization.
 pub struct Parser {
     // ── Public configuration ──────────────────────────────────────────────
     /// Max DOM nodes to process. 0 = unlimited. Port of `MaxElemsToParse`.
@@ -120,9 +152,15 @@ impl Parser {
             classes_to_preserve: vec!["page".to_string()],
             keep_classes: false,
             tags_to_score: vec![
-                "section".to_string(), "h2".to_string(), "h3".to_string(),
-                "h4".to_string(), "h5".to_string(), "h6".to_string(),
-                "p".to_string(), "td".to_string(), "pre".to_string(),
+                "section".to_string(),
+                "h2".to_string(),
+                "h3".to_string(),
+                "h4".to_string(),
+                "h5".to_string(),
+                "h6".to_string(),
+                "p".to_string(),
+                "td".to_string(),
+                "pre".to_string(),
             ],
             disable_jsonld: false,
             allowed_video_regex: None,
@@ -226,9 +264,7 @@ impl Parser {
         (style.is_empty() || !crate::regexp::RX_DISPLAY_NONE.is_match(style))
             && (style.is_empty() || !crate::regexp::RX_VISIBILITY_HIDDEN.is_match(style))
             && !doc.has_attribute(id, "hidden")
-            && (aria_hidden.is_empty()
-                || aria_hidden != "true"
-                || class.contains("fallback-image"))
+            && (aria_hidden.is_empty() || aria_hidden != "true" || class.contains("fallback-image"))
     }
 
     /// Ancestor-tag check operating on an external `doc` (no depth limit, no filter).
@@ -269,9 +305,7 @@ impl Parser {
             let root = self.doc.root();
             let n = self.doc.get_elements_by_tag_name(root, "*").len();
             if n > self.max_elems_to_parse {
-                return Err(Error::Parse(format!(
-                    "document too large: {n} elements"
-                )));
+                return Err(Error::Parse(format!("document too large: {n} elements")));
             }
         }
 
@@ -303,13 +337,18 @@ impl Parser {
             self.post_process_content(content_id);
 
             // The content node is a <div> wrapper; take its first element child.
-            let readable = self.doc.first_element_child(content_id).unwrap_or(content_id);
+            let readable = self
+                .doc
+                .first_element_child(content_id)
+                .unwrap_or(content_id);
             let content_html = self.doc.outer_html(readable);
             let text = inner_text(&self.doc, readable);
             let len = char_count(&text);
 
             // Read direction from the content node.
-            let dir = self.doc.attr(readable, "dir")
+            let dir = self
+                .doc
+                .attr(readable, "dir")
                 .or_else(|| self.doc.attr(content_id, "dir"))
                 .unwrap_or("")
                 .to_string();
@@ -324,10 +363,9 @@ impl Parser {
         let excerpt_meta = metadata.get("excerpt").cloned().unwrap_or_default();
         let excerpt = if excerpt_meta.is_empty() {
             // Find the first <p> inside the readable node.
-            let readable_for_excerpt = article_content
-                .and_then(|cid| self.doc.first_element_child(cid));
-            let first_p = readable_for_excerpt
-                .and_then(|r| self.get_element_by_tag_name(r, "p"));
+            let readable_for_excerpt =
+                article_content.and_then(|cid| self.doc.first_element_child(cid));
+            let first_p = readable_for_excerpt.and_then(|r| self.get_element_by_tag_name(r, "p"));
             if let Some(p) = first_p {
                 let p_text = inner_text(&self.doc, p);
                 let normalized: String = p_text.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -338,7 +376,10 @@ impl Parser {
         } else {
             // Mirror Go's `article.Excerpt()`: always normalize whitespace
             // with strings.Fields semantics regardless of source.
-            excerpt_meta.split_whitespace().collect::<Vec<_>>().join(" ")
+            excerpt_meta
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
         };
 
         Ok(Article {
@@ -394,7 +435,10 @@ impl Parser {
     /// Port of `getElementByTagName` — first descendant element with the given tag (DFS).
     fn get_element_by_tag_name(&self, id: NodeId, tag: &str) -> Option<NodeId> {
         // get_elements_by_tag_name returns all matches; take the first.
-        self.doc.get_elements_by_tag_name(id, tag).into_iter().next()
+        self.doc
+            .get_elements_by_tag_name(id, tag)
+            .into_iter()
+            .next()
     }
 
     /// Port of `getInnerText` — text content, optionally whitespace-normalized.
@@ -410,7 +454,9 @@ impl Parser {
     /// Port of `isWhitespace` — true if the node is purely whitespace.
     fn is_whitespace(&self, id: NodeId) -> bool {
         match self.doc.html.tree.get(id).map(|n| n.value()) {
-            Some(Node::Text(text)) => !has_text_content(&self.doc, id) && text.text.trim().is_empty(),
+            Some(Node::Text(text)) => {
+                !has_text_content(&self.doc, id) && text.text.trim().is_empty()
+            }
             Some(Node::Element(_)) => self.doc.tag_name(id) == "br",
             _ => false,
         }
@@ -426,14 +472,17 @@ impl Parser {
             return true;
         }
         if (tag == "a" || tag == "del" || tag == "ins")
-            && self.doc.child_nodes(id).iter().all(|&c| self.is_phrasing_content(c))
+            && self
+                .doc
+                .child_nodes(id)
+                .iter()
+                .all(|&c| self.is_phrasing_content(c))
         {
             return true;
         }
         false
     }
 
-    #[allow(dead_code)] // used in Phase 6 (replaceBrs inner traversal)
     /// Port of `nextNode` — advance past whitespace-only nodes.
     ///
     /// Starting at `id`, returns the first sibling (or `id` itself) that is either
@@ -528,7 +577,6 @@ impl Parser {
         })
     }
 
-    #[allow(dead_code)] // used in Phase 6 (grabArticle)
     /// Port of `hasChildBlockElement` — true if any child is a block-level element.
     fn has_child_block_element(&self, id: NodeId) -> bool {
         self.doc.child_nodes(id).iter().any(|&c| {
@@ -537,15 +585,8 @@ impl Parser {
         })
     }
 
-    #[allow(dead_code)] // used in Phase 6 (unwrapNoscriptImages delegation)
-    /// Port of `isSingleImage` — true if the node is or contains exactly one image.
-    fn is_single_image(&self, id: NodeId) -> bool {
-        is_single_image_in(&self.doc, id)
-    }
-
     // ── Scoring / classification helpers ────────────────────────────────
 
-    #[allow(dead_code)] // used in Phase 6 (grabArticle)
     /// Port of `isProbablyVisible` — true if the node is not hidden.
     fn is_probably_visible(&self, id: NodeId) -> bool {
         let style = self.doc.attr(id, "style").unwrap_or("");
@@ -555,12 +596,9 @@ impl Parser {
         (style.is_empty() || !RX_DISPLAY_NONE.is_match(style))
             && (style.is_empty() || !RX_VISIBILITY_HIDDEN.is_match(style))
             && !self.doc.has_attribute(id, "hidden")
-            && (aria_hidden.is_empty()
-                || aria_hidden != "true"
-                || class.contains("fallback-image"))
+            && (aria_hidden.is_empty() || aria_hidden != "true" || class.contains("fallback-image"))
     }
 
-    #[allow(dead_code)] // used in Phase 6 (grabArticle)
     /// Port of `isValidByline` — true if the node looks like a byline.
     fn is_valid_byline(&self, id: NodeId, match_string: &str) -> bool {
         let rel = self.doc.attr(id, "rel").unwrap_or("");
@@ -568,7 +606,6 @@ impl Parser {
         rel == "author" || itemprop.contains("author") || crate::regexp::is_byline(match_string)
     }
 
-    #[allow(dead_code)] // used in Phase 6 (grabArticle)
     /// Port of `headerDuplicatesTitle` — true if the node is an h1/h2 whose text is
     /// very similar to the article title.
     fn header_duplicates_title(&self, id: NodeId) -> bool {
@@ -577,10 +614,9 @@ impl Parser {
             return false;
         }
         let heading = self.get_inner_text(id, false);
-        self.text_similarity(&self.article_title.clone(), &heading) > 0.75
+        text_similarity(&self.article_title, &heading) > 0.75
     }
 
-    #[allow(dead_code)] // used in Phase 6 (grabArticle, cleanHeaders, cleanConditionally)
     /// Port of `getClassWeight` — score bonus/penalty from class/id names.
     ///
     /// Returns 0 when `use_weight_classes` is false.
@@ -608,14 +644,16 @@ impl Parser {
         weight
     }
 
-    #[allow(dead_code)] // used in Phase 6 (getLinkDensity)
     /// Port of `getLinkDensityCoefficient` — hash-only links are weighted lower.
     fn get_link_density_coefficient(doc: &Document, a: NodeId) -> f64 {
         let href = doc.attr(a, "href").unwrap_or("").trim().to_string();
-        if href.len() > 1 && href.starts_with('#') { 0.3 } else { 1.0 }
+        if href.len() > 1 && href.starts_with('#') {
+            0.3
+        } else {
+            1.0
+        }
     }
 
-    #[allow(dead_code)] // used in Phase 6 (grabArticle, cleanConditionally)
     /// Port of `getLinkDensity` — ratio of link chars to total chars in the node.
     fn get_link_density(&self, id: NodeId) -> f64 {
         let mut total = crate::traverse::CharCounter::new();
@@ -657,10 +695,13 @@ impl Parser {
 
         walk(&self.doc, id, &mut None, &mut total, &mut link_weighted);
 
-        if total.total() == 0 { 0.0 } else { link_weighted / total.total() as f64 }
+        if total.total() == 0 {
+            0.0
+        } else {
+            link_weighted / total.total() as f64
+        }
     }
 
-    #[allow(dead_code)] // used in Phase 6 (cleanConditionally, grabArticle)
     /// Port of `hasAncestorTag` — true if any ancestor (up to `max_depth`) has the given tag.
     ///
     /// `max_depth <= 0` means no limit.
@@ -675,7 +716,10 @@ impl Parser {
                 return false;
             }
             if self.doc.tag_name(parent) == tag
-                && filter.as_ref().map(|f| f(&self.doc, parent)).unwrap_or(true)
+                && filter
+                    .as_ref()
+                    .map(|f| f(&self.doc, parent))
+                    .unwrap_or(true)
             {
                 return true;
             }
@@ -685,7 +729,6 @@ impl Parser {
         false
     }
 
-    #[allow(dead_code)] // used in Phase 6 (grabArticle scoring)
     /// Port of `getNodeAncestors` — collect ancestors up to `max_depth` (0 = unlimited).
     fn get_node_ancestors(&self, id: NodeId, max_depth: usize) -> Vec<NodeId> {
         let mut result = Vec::new();
@@ -700,35 +743,6 @@ impl Parser {
         result
     }
 
-    /// Port of `textSimilarity` (Parser method — different algorithm from utils::text_similarity).
-    ///
-    /// Returns `1 - (unique_B_chars / total_B_chars)`, lowercased, tokenized by `\W+`.
-    fn text_similarity(&self, a: &str, b: &str) -> f64 {
-        let a_lower = a.to_lowercase();
-        let b_lower = b.to_lowercase();
-
-        let tokens_a: HashSet<&str> = RX_TOKENIZE
-            .split(&a_lower)
-            .filter(|s| !s.is_empty())
-            .collect();
-
-        let tokens_b: Vec<&str> = RX_TOKENIZE
-            .split(&b_lower)
-            .filter(|s| !s.is_empty())
-            .collect();
-
-        let unique_b: Vec<&str> = tokens_b.iter().filter(|t| !tokens_a.contains(**t)).copied().collect();
-
-        let merged_b = tokens_b.join(" ");
-        let merged_unique_b = unique_b.join(" ");
-
-        let total = char_count(&merged_b);
-        if total == 0 {
-            return 0.0;
-        }
-        1.0 - char_count(&merged_unique_b) as f64 / total as f64
-    }
-
     // ── Document preparation ──────────────────────────────────────────────
 
     /// Port of `removeComments` — remove all HTML comment nodes.
@@ -740,7 +754,10 @@ impl Parser {
     fn remove_comments_from(&mut self, id: NodeId) {
         let children: Vec<NodeId> = self.doc.child_nodes(id);
         for child in children {
-            if matches!(self.doc.html.tree.get(child).map(|n| n.value()), Some(Node::Comment(_))) {
+            if matches!(
+                self.doc.html.tree.get(child).map(|n| n.value()),
+                Some(Node::Comment(_))
+            ) {
                 self.doc.remove(child);
             } else {
                 self.remove_comments_from(child);
@@ -751,7 +768,9 @@ impl Parser {
     /// Port of `removeScripts` — remove all `<script>` and `<noscript>` elements.
     fn remove_scripts(&mut self) {
         let root = self.doc.root();
-        let targets = self.doc.get_all_nodes_with_tag(root, &["script", "noscript"]);
+        let targets = self
+            .doc
+            .get_all_nodes_with_tag(root, &["script", "noscript"]);
         self.remove_nodes(targets, None::<fn(&Document, NodeId) -> bool>);
     }
 
@@ -784,12 +803,22 @@ impl Parser {
 
     fn replace_brs_finder(&mut self, n: NodeId) {
         // Get the first child (any type) by using ego_tree's native traversal.
-        let first = self.doc.html.tree.get(n).and_then(|x| x.first_child().map(|c| c.id()));
+        let first = self
+            .doc
+            .html
+            .tree
+            .get(n)
+            .and_then(|x| x.first_child().map(|c| c.id()));
         let mut cur = first;
 
         while let Some(child) = cur {
             // Capture next sibling before any mutations.
-            let next_sib = self.doc.html.tree.get(child).and_then(|x| x.next_sibling().map(|s| s.id()));
+            let next_sib = self
+                .doc
+                .html
+                .tree
+                .get(child)
+                .and_then(|x| x.next_sibling().map(|s| s.id()));
             let tag = self.doc.tag_name(child).to_string();
 
             if tag == "pre" {
@@ -799,7 +828,12 @@ impl Parser {
             if tag == "br" {
                 let new_node = self.replace_br(child);
                 // Continue from after the new node.
-                cur = self.doc.html.tree.get(new_node).and_then(|x| x.next_sibling().map(|s| s.id()));
+                cur = self
+                    .doc
+                    .html
+                    .tree
+                    .get(new_node)
+                    .and_then(|x| x.next_sibling().map(|s| s.id()));
                 continue;
             }
             if !tag.is_empty() {
@@ -815,7 +849,12 @@ impl Parser {
     /// Returns the original `br` NodeId if no replacement happened, or the new `<p>` NodeId.
     fn replace_br(&mut self, br: NodeId) -> NodeId {
         // Collect the chain: skip whitespace-only nodes; stop at non-<br> elements.
-        let mut next = self.doc.html.tree.get(br).and_then(|x| x.next_sibling().map(|s| s.id()));
+        let mut next = self
+            .doc
+            .html
+            .tree
+            .get(br)
+            .and_then(|x| x.next_sibling().map(|s| s.id()));
         let mut replaced = false;
 
         loop {
@@ -827,7 +866,12 @@ impl Parser {
                 break;
             }
             replaced = true;
-            let after = self.doc.html.tree.get(n).and_then(|x| x.next_sibling().map(|s| s.id()));
+            let after = self
+                .doc
+                .html
+                .tree
+                .get(n)
+                .and_then(|x| x.next_sibling().map(|s| s.id()));
             self.doc.remove(n);
             next = after;
         }
@@ -843,36 +887,66 @@ impl Parser {
         self.doc.remove(br);
 
         // Absorb phrasing-content siblings into the new `<p>`.
-        let mut sib = self.doc.html.tree.get(p).and_then(|x| x.next_sibling().map(|s| s.id()));
+        let mut sib = self
+            .doc
+            .html
+            .tree
+            .get(p)
+            .and_then(|x| x.next_sibling().map(|s| s.id()));
         while let Some(s) = sib {
             // Stop at a second `<br>` run.
             if self.doc.tag_name(s) == "br" {
-                let nxt = self.doc.html.tree.get(s).and_then(|x| x.next_sibling().map(|s2| s2.id()));
+                let nxt = self
+                    .doc
+                    .html
+                    .tree
+                    .get(s)
+                    .and_then(|x| x.next_sibling().map(|s2| s2.id()));
                 let next_elem = nxt.and_then(|n| self.advance_past_whitespace_siblings(Some(n)));
-                if next_elem.map(|ne| self.doc.tag_name(ne) == "br").unwrap_or(false) {
+                if next_elem
+                    .map(|ne| self.doc.tag_name(ne) == "br")
+                    .unwrap_or(false)
+                {
                     break;
                 }
             }
             if !self.is_phrasing_content(s) {
                 break;
             }
-            let after = self.doc.html.tree.get(s).and_then(|x| x.next_sibling().map(|s2| s2.id()));
+            let after = self
+                .doc
+                .html
+                .tree
+                .get(s)
+                .and_then(|x| x.next_sibling().map(|s2| s2.id()));
             self.doc.append_child(p, s);
             sib = after;
         }
 
         // Trim trailing whitespace from the new `<p>`.
         loop {
-            let last = self.doc.html.tree.get(p).and_then(|x| x.last_child().map(|c| c.id()));
+            let last = self
+                .doc
+                .html
+                .tree
+                .get(p)
+                .and_then(|x| x.last_child().map(|c| c.id()));
             match last {
                 None => break,
-                Some(l) if self.is_whitespace(l) => { self.doc.remove(l); }
+                Some(l) if self.is_whitespace(l) => {
+                    self.doc.remove(l);
+                }
                 _ => break,
             }
         }
 
         // If `<p>` ended up inside another `<p>`, promote parent to `<div>`.
-        if self.doc.parent(p).map(|par| self.doc.tag_name(par) == "p").unwrap_or(false) {
+        if self
+            .doc
+            .parent(p)
+            .map(|par| self.doc.tag_name(par) == "p")
+            .unwrap_or(false)
+        {
             let parent_p = self.doc.parent(p).unwrap();
             self.set_node_tag(parent_p, "div");
         }
@@ -892,17 +966,23 @@ impl Parser {
             if has_text_content(&self.doc, n) {
                 return Some(n);
             }
-            cur = self.doc.html.tree.get(n).and_then(|x| x.next_sibling().map(|s| s.id()));
+            cur = self
+                .doc
+                .html
+                .tree
+                .get(n)
+                .and_then(|x| x.next_sibling().map(|s| s.id()));
         }
         None
     }
 
     // ── Image handling ────────────────────────────────────────────────────
 
-    #[allow(dead_code)] // used in Phase 6 (prepArticle)
     /// Port of `fixLazyImages` — convert data-src / lazy-loaded images to real src attrs.
     fn fix_lazy_images(&mut self, root: NodeId) {
-        let nodes = self.doc.get_all_nodes_with_tag(root, &["img", "picture", "figure"]);
+        let nodes = self
+            .doc
+            .get_all_nodes_with_tag(root, &["img", "picture", "figure"]);
         for elem in nodes {
             let src = self.doc.attr(elem, "src").unwrap_or("").to_string();
             let tag = self.doc.tag_name(elem).to_string();
@@ -957,7 +1037,10 @@ impl Parser {
                 if tag == "img" || tag == "picture" {
                     self.doc.set_attr(elem, copy_to, &attr_val);
                 } else if tag == "figure" {
-                    let has_img = !self.doc.get_all_nodes_with_tag(elem, &["img", "picture"]).is_empty();
+                    let has_img = !self
+                        .doc
+                        .get_all_nodes_with_tag(elem, &["img", "picture"])
+                        .is_empty();
                     if !has_img {
                         let img = self.doc.create_element("img");
                         self.doc.set_attr(img, copy_to, &attr_val);
@@ -998,7 +1081,9 @@ impl Parser {
 
             let content = self.doc.text_content(noscript);
             let fragment = Document::parse(&content);
-            let Some(frag_body) = fragment.body() else { continue };
+            let Some(frag_body) = fragment.body() else {
+                continue;
+            };
             if !is_single_image_in(&fragment, frag_body) {
                 continue;
             }
@@ -1010,14 +1095,23 @@ impl Parser {
                     // Find the prev img element.
                     let prev_img = if self.doc.tag_name(prev_elem) == "img" {
                         prev_elem
-                    } else if let Some(i) = self.doc.get_elements_by_tag_name(prev_elem, "img").into_iter().next() {
+                    } else if let Some(i) = self
+                        .doc
+                        .get_elements_by_tag_name(prev_elem, "img")
+                        .into_iter()
+                        .next()
+                    {
                         i
                     } else {
                         continue;
                     };
 
                     // Get fragment img attrs.
-                    let frag_img = match fragment.get_elements_by_tag_name(frag_body, "img").into_iter().next() {
+                    let frag_img = match fragment
+                        .get_elements_by_tag_name(frag_body, "img")
+                        .into_iter()
+                        .next()
+                    {
                         Some(i) => i,
                         None => continue,
                     };
@@ -1036,7 +1130,11 @@ impl Parser {
                             continue;
                         }
                         if k == "src" || k == "srcset" || RX_IMG_EXTENSIONS.is_match(&v) {
-                            let existing = self.doc.attr(new_img, &k).map(|s| s.to_string()).unwrap_or_default();
+                            let existing = self
+                                .doc
+                                .attr(new_img, &k)
+                                .map(|s| s.to_string())
+                                .unwrap_or_default();
                             if existing == v {
                                 continue;
                             }
@@ -1065,7 +1163,11 @@ impl Parser {
             let actual_img = if fragment.tag_name(frag_first) == "img" {
                 frag_first
             } else {
-                match fragment.get_elements_by_tag_name(frag_first, "img").into_iter().next() {
+                match fragment
+                    .get_elements_by_tag_name(frag_first, "img")
+                    .into_iter()
+                    .next()
+                {
                     Some(i) => i,
                     None => continue,
                 }
@@ -1109,7 +1211,8 @@ impl Parser {
     fn clean_classes_impl(&mut self, id: NodeId, preserve: &HashSet<String>) {
         if self.doc.is_element(id) {
             if let Some(cls) = self.doc.attr(id, "class") {
-                let kept: Vec<&str> = cls.split_whitespace()
+                let kept: Vec<&str> = cls
+                    .split_whitespace()
                     .filter(|c| preserve.contains(*c))
                     .collect();
                 if kept.is_empty() {
@@ -1140,7 +1243,9 @@ impl Parser {
             if href.starts_with("javascript:") {
                 let children = self.doc.child_nodes(link);
                 if children.len() == 1 {
-                    if let Some(Node::Text(t)) = self.doc.html.tree.get(children[0]).map(|n| n.value()) {
+                    if let Some(Node::Text(t)) =
+                        self.doc.html.tree.get(children[0]).map(|n| n.value())
+                    {
                         let text_content = t.text.as_ref().to_string();
                         let text_node = self.doc.create_text_node(&text_content);
                         self.doc.insert_before(link, text_node);
@@ -1185,12 +1290,14 @@ impl Parser {
             if let Some(base) = &base_uri.clone() {
                 if let Some(src) = self.doc.attr(media, "src").map(|s| s.to_string()) {
                     if !src.is_empty() {
-                        self.doc.set_attr(media, "src", &to_absolute_uri(&src, base));
+                        self.doc
+                            .set_attr(media, "src", &to_absolute_uri(&src, base));
                     }
                 }
                 if let Some(poster) = self.doc.attr(media, "poster").map(|s| s.to_string()) {
                     if !poster.is_empty() {
-                        self.doc.set_attr(media, "poster", &to_absolute_uri(&poster, base));
+                        self.doc
+                            .set_attr(media, "poster", &to_absolute_uri(&poster, base));
                     }
                 }
                 if let Some(srcset) = self.doc.attr(media, "srcset").map(|s| s.to_string()) {
@@ -1261,7 +1368,6 @@ impl Parser {
         // Side tables are dropped at end of parse_and_mutate; nothing to clean.
     }
 
-    #[allow(dead_code)] // used in Phase 6 (prepArticle)
     /// Port of `cleanStyles` — remove presentational attributes from all elements.
     fn clean_styles(&mut self, id: NodeId) {
         let tag = self.doc.tag_name(id).to_string();
@@ -1272,7 +1378,9 @@ impl Parser {
         let is_size_elem = DEPRECATED_SIZE_ATTR_ELEMS.contains(&tag.as_str());
 
         let attrs_to_remove: Vec<String> = {
-            self.doc.get_all_attrs(id).into_iter()
+            self.doc
+                .get_all_attrs(id)
+                .into_iter()
                 .filter_map(|(k, _)| {
                     // Remove width/height only from deprecated size-attribute elements
                     // (table, th, td, hr, pre).  Keep them on <img> and others.
@@ -1323,9 +1431,9 @@ impl Parser {
             let root = self.doc.root();
             let headings = self.doc.get_all_nodes_with_tag(root, &["h1", "h2"]);
             let trimmed = cur_title.trim().to_string();
-            let match_found = headings.iter().any(|&h| {
-                self.doc.text_content(h).trim() == trimmed.as_str()
-            });
+            let match_found = headings
+                .iter()
+                .any(|&h| self.doc.text_content(h).trim() == trimmed.as_str());
 
             if !match_found {
                 // Port of strings.LastIndex(origTitle, ":") + 1 — match Go exactly.
@@ -1358,14 +1466,15 @@ impl Parser {
         cur_title = normalize_spaces(cur_title.trim());
 
         let cur_word_count = word_count(&cur_title);
-        let tmp_orig = RX_TITLE_ANY_SEPARATOR.replace_all(&orig_title, "").into_owned();
+        let tmp_orig = RX_TITLE_ANY_SEPARATOR
+            .replace_all(&orig_title, "")
+            .into_owned();
 
         // Go uses signed integer subtraction: wordCount(tmpOrig) - 1 can be -1 when
         // wordCount is 0 (purely separator titles), which is always != any usize word count.
         // Mirror that by casting to i64.
         if cur_word_count <= 4
-            && (!had_hierarchical_sep
-                || cur_word_count as i64 != word_count(&tmp_orig) as i64 - 1)
+            && (!had_hierarchical_sep || cur_word_count as i64 != word_count(&tmp_orig) as i64 - 1)
         {
             cur_title = orig_title;
         }
@@ -1378,7 +1487,9 @@ impl Parser {
         let mut metadata: Option<HashMap<String, String>> = None;
 
         let root = self.doc.root();
-        let scripts = self.doc.query_selector_all(root, r#"script[type="application/ld+json"]"#);
+        let scripts = self
+            .doc
+            .query_selector_all(root, r#"script[type="application/ld+json"]"#);
 
         for script in scripts {
             if metadata.is_some() {
@@ -1396,7 +1507,8 @@ impl Parser {
             // Find the right object (may be an array of items, or a @graph, or a direct object).
             let obj: &serde_json::Map<String, serde_json::Value> = match parsed {
                 serde_json::Value::Array(ref arr) => {
-                    match arr.iter()
+                    match arr
+                        .iter()
                         .find(|item| {
                             item.get("@type")
                                 .and_then(|t| t.as_str())
@@ -1416,12 +1528,11 @@ impl Parser {
             // Validate @context is schema.org (always, for both array items and top-level objects).
             let context_ok = match obj.get("@context") {
                 Some(serde_json::Value::String(s)) => RX_SCHEMA_ORG.is_match(s),
-                Some(serde_json::Value::Object(m)) => {
-                    m.get("@vocab")
-                        .and_then(|v| v.as_str())
-                        .map(|s| RX_SCHEMA_ORG.is_match(s))
-                        .unwrap_or(false)
-                }
+                Some(serde_json::Value::Object(m)) => m
+                    .get("@vocab")
+                    .and_then(|v| v.as_str())
+                    .map(|s| RX_SCHEMA_ORG.is_match(s))
+                    .unwrap_or(false),
                 _ => false,
             };
             if !context_ok {
@@ -1466,21 +1577,31 @@ impl Parser {
             let mut meta = HashMap::new();
 
             // Title: prefer name/headline whichever better matches HTML title.
-            let name = final_obj.get("name").and_then(|v| v.as_str()).map(str::trim);
-            let headline = final_obj.get("headline").and_then(|v| v.as_str()).map(str::trim);
+            let name = final_obj
+                .get("name")
+                .and_then(|v| v.as_str())
+                .map(str::trim);
+            let headline = final_obj
+                .get("headline")
+                .and_then(|v| v.as_str())
+                .map(str::trim);
             match (name, headline) {
                 (Some(n), Some(h)) if n != h => {
                     let title = self.get_article_title();
-                    let name_matches = self.text_similarity(n, &title) > 0.75;
-                    let headline_matches = self.text_similarity(h, &title) > 0.75;
+                    let name_matches = text_similarity(n, &title) > 0.75;
+                    let headline_matches = text_similarity(h, &title) > 0.75;
                     if headline_matches && !name_matches {
                         meta.insert("title".to_string(), h.to_string());
                     } else {
                         meta.insert("title".to_string(), n.to_string());
                     }
                 }
-                (Some(n), _) => { meta.insert("title".to_string(), n.to_string()); }
-                (_, Some(h)) => { meta.insert("title".to_string(), h.to_string()); }
+                (Some(n), _) => {
+                    meta.insert("title".to_string(), n.to_string());
+                }
+                (_, Some(h)) => {
+                    meta.insert("title".to_string(), h.to_string());
+                }
                 _ => {}
             }
 
@@ -1539,7 +1660,12 @@ impl Parser {
             let rel = self.doc.attr(link, "rel").unwrap_or("").trim().to_string();
             let link_type = self.doc.attr(link, "type").unwrap_or("").trim().to_string();
             let href = self.doc.attr(link, "href").unwrap_or("").trim().to_string();
-            let sizes = self.doc.attr(link, "sizes").unwrap_or("").trim().to_string();
+            let sizes = self
+                .doc
+                .attr(link, "sizes")
+                .unwrap_or("")
+                .trim()
+                .to_string();
 
             if href.is_empty() || !rel.contains("icon") {
                 continue;
@@ -1592,7 +1718,8 @@ impl Parser {
 
             if !element_property.is_empty() {
                 // Go processes matches in reverse order, so first match wins.
-                let all_matches: Vec<_> = RX_PROPERTY_PATTERN.find_iter(&element_property).collect();
+                let all_matches: Vec<_> =
+                    RX_PROPERTY_PATTERN.find_iter(&element_property).collect();
                 for m in all_matches.into_iter().rev() {
                     let name = m.as_str().to_lowercase();
                     let name: String = name.split_whitespace().collect();
@@ -1601,7 +1728,10 @@ impl Parser {
                 }
             }
 
-            if matches.is_empty() && !element_name.is_empty() && RX_NAME_PATTERN.is_match(&element_name) {
+            if matches.is_empty()
+                && !element_name.is_empty()
+                && RX_NAME_PATTERN.is_match(&element_name)
+            {
                 let name = element_name.to_lowercase();
                 let name: String = name.split_whitespace().collect();
                 let name = name.replace('.', ":");
@@ -1619,17 +1749,29 @@ impl Parser {
         let metadata_title = {
             let t = str_or(&[
                 j("title"),
-                v("dc:title"), v("dcterm:title"), v("og:title"),
-                v("weibo:article:title"), v("weibo:webpage:title"),
-                v("title"), v("twitter:title"), v("parsely-title"),
+                v("dc:title"),
+                v("dcterm:title"),
+                v("og:title"),
+                v("weibo:article:title"),
+                v("weibo:webpage:title"),
+                v("title"),
+                v("twitter:title"),
+                v("parsely-title"),
             ]);
-            if t.is_empty() { self.get_article_title() } else { t.to_string() }
+            if t.is_empty() {
+                self.get_article_title()
+            } else {
+                t.to_string()
+            }
         };
 
         let metadata_byline = {
             let b = str_or(&[
                 j("byline"),
-                v("dc:creator"), v("dcterm:creator"), v("author"), v("parsely-author"),
+                v("dc:creator"),
+                v("dcterm:creator"),
+                v("author"),
+                v("parsely-author"),
             ]);
             if b.is_empty() {
                 let article_author = v("article:author");
@@ -1645,10 +1787,15 @@ impl Parser {
 
         let metadata_excerpt = str_or(&[
             j("excerpt"),
-            v("dc:description"), v("dcterm:description"), v("og:description"),
-            v("weibo:article:description"), v("weibo:webpage:description"),
-            v("description"), v("twitter:description"),
-        ]).to_string();
+            v("dc:description"),
+            v("dcterm:description"),
+            v("og:description"),
+            v("weibo:article:description"),
+            v("weibo:webpage:description"),
+            v("description"),
+            v("twitter:description"),
+        ])
+        .to_string();
 
         let metadata_site_name = str_or(&[j("siteName"), v("og:site_name")]).to_string();
 
@@ -1658,15 +1805,21 @@ impl Parser {
 
         let metadata_published_time = str_or(&[
             j("datePublished"),
-            v("article:published_time"), v("dcterms.available"),
-            v("dcterms.created"), v("dcterms.issued"),
-            v("weibo:article:create_at"), v("parsely-pub-date"),
-        ]).to_string();
+            v("article:published_time"),
+            v("dcterms.available"),
+            v("dcterms.created"),
+            v("dcterms.issued"),
+            v("weibo:article:create_at"),
+            v("parsely-pub-date"),
+        ])
+        .to_string();
 
         let metadata_modified_time = str_or(&[
             j("dateModified"),
-            v("article:modified_time"), v("dcterms.modified"),
-        ]).to_string();
+            v("article:modified_time"),
+            v("dcterms.modified"),
+        ])
+        .to_string();
 
         // HTML-unescape field values (in case of double-encoded entities in meta tags).
         let mut result = HashMap::new();
@@ -1676,8 +1829,14 @@ impl Parser {
         result.insert("siteName".to_string(), html_unescape(&metadata_site_name));
         result.insert("image".to_string(), metadata_image);
         result.insert("favicon".to_string(), metadata_favicon);
-        result.insert("publishedTime".to_string(), html_unescape(&metadata_published_time));
-        result.insert("modifiedTime".to_string(), html_unescape(&metadata_modified_time));
+        result.insert(
+            "publishedTime".to_string(),
+            html_unescape(&metadata_published_time),
+        );
+        result.insert(
+            "modifiedTime".to_string(),
+            html_unescape(&metadata_modified_time),
+        );
         result
     }
 
@@ -1884,9 +2043,12 @@ impl Parser {
 
         // Nodes inside data tables are never removed.
         let data_tables = &self.data_tables;
-        if self.has_ancestor_tag(node, "table", -1, Some(|_doc: &Document, id: NodeId| {
-            data_tables.contains(&id)
-        })) {
+        if self.has_ancestor_tag(
+            node,
+            "table",
+            -1,
+            Some(|_doc: &Document, id: NodeId| data_tables.contains(&id)),
+        ) {
             return false;
         }
 
@@ -1951,11 +2113,9 @@ impl Parser {
 
             let have_to_remove = (stats.img_count > 1
                 && (stats.p_count as f64 / stats.img_count as f64) < 0.5
-                && !self.has_ancestor_tag::<fn(&Document, NodeId) -> bool>(
-                    node, "figure", 3, None,
-                ))
-                || (!is_list
-                    && (stats.li_count as i64 + LI_COUNT_OFFSET) > stats.p_count as i64)
+                && !self
+                    .has_ancestor_tag::<fn(&Document, NodeId) -> bool>(node, "figure", 3, None))
+                || (!is_list && (stats.li_count as i64 + LI_COUNT_OFFSET) > stats.p_count as i64)
                 || ((stats.input_count as f64) > (stats.p_count as f64 / 3.0).floor())
                 || (!is_list
                     && heading_density < 0.9
@@ -1967,8 +2127,7 @@ impl Parser {
                     ))
                 || (!is_list && weight < 25 && link_density > 0.2)
                 || (weight >= 25 && link_density > 0.5)
-                || ((stats.embed_count == 1 && stats.chars.total() < 75)
-                    || stats.embed_count > 1)
+                || ((stats.embed_count == 1 && stats.chars.total() < 75) || stats.embed_count > 1)
                 || (stats.img_count == 0 && text_density == 0.0);
 
             // Allow simple lists of images to remain.
@@ -2091,12 +2250,16 @@ impl Parser {
                 None => continue,
             };
 
-            let new_tag =
-                if self.doc.child_nodes(cell).iter().all(|&c| self.is_phrasing_content(c)) {
-                    "p"
-                } else {
-                    "div"
-                };
+            let new_tag = if self
+                .doc
+                .child_nodes(cell)
+                .iter()
+                .all(|&c| self.is_phrasing_content(c))
+            {
+                "p"
+            } else {
+                "div"
+            };
 
             self.doc.rename_tag(cell, new_tag);
 
@@ -2157,8 +2320,7 @@ impl Parser {
                 let match_string = format!("{class} {id_attr}");
 
                 if tag == "html" {
-                    self.article_lang =
-                        self.doc.attr(n, "lang").unwrap_or("").to_string();
+                    self.article_lang = self.doc.attr(n, "lang").unwrap_or("").to_string();
                 }
 
                 if !self.is_probably_visible(n) {
@@ -2217,12 +2379,10 @@ impl Parser {
                         && tag != "a"
                         && crate::regexp::is_unlikely_candidate(&match_string)
                         && !crate::regexp::maybe_its_a_candidate(&match_string)
-                        && !self.has_ancestor_tag::<fn(&Document, NodeId) -> bool>(
-                            n, "table", 3, None,
-                        )
-                        && !self.has_ancestor_tag::<fn(&Document, NodeId) -> bool>(
-                            n, "code", 3, None,
-                        )
+                        && !self
+                            .has_ancestor_tag::<fn(&Document, NodeId) -> bool>(n, "table", 3, None)
+                        && !self
+                            .has_ancestor_tag::<fn(&Document, NodeId) -> bool>(n, "code", 3, None)
                     {
                         node = self.remove_and_get_next(n);
                         continue;
@@ -2308,8 +2468,7 @@ impl Parser {
                     }
 
                     // div with single p child → promote the p.
-                    if self.has_single_tag_inside_element(n, "p")
-                        && self.get_link_density(n) < 0.25
+                    if self.has_single_tag_inside_element(n, "p") && self.get_link_density(n) < 0.25
                     {
                         let div_id = self.doc.attr(n, "id").unwrap_or("").to_string();
                         let div_class = self.doc.attr(n, "class").unwrap_or("").to_string();
@@ -2368,10 +2527,8 @@ impl Parser {
                 }
 
                 // Base score + commas + 1 + char bonus.
-                let content_score = 1
-                    + num_commas
-                    + 1
-                    + (((num_chars as f64) / 100.0).floor() as usize).min(3);
+                let content_score =
+                    1 + num_commas + 1 + (((num_chars as f64) / 100.0).floor() as usize).min(3);
 
                 for (level, &ancestor) in ancestors.iter().enumerate() {
                     let anc_tag = self.doc.tag_name(ancestor).to_string();
@@ -2412,8 +2569,8 @@ impl Parser {
 
             // Scale scores by link density.
             for &candidate in &candidates {
-                let score = self.get_content_score(candidate)
-                    * (1.0 - self.get_link_density(candidate));
+                let score =
+                    self.get_content_score(candidate) * (1.0 - self.get_link_density(candidate));
                 self.set_content_score(candidate, score);
             }
 
@@ -2545,8 +2702,7 @@ impl Parser {
 
             // ── Sibling gathering ─────────────────────────────────────────
             let article_content = self.doc.create_element("div");
-            let sibling_score_threshold =
-                10.0_f64.max(self.get_content_score(top_candidate) * 0.2);
+            let sibling_score_threshold = 10.0_f64.max(self.get_content_score(top_candidate) * 0.2);
             let top_candidate_score = self.get_content_score(top_candidate);
             let top_candidate_class = self
                 .doc
@@ -2838,23 +2994,41 @@ fn walk_cond(
                 let parent_tag = doc.parent(n).map(|p| doc.tag_name(p)).unwrap_or("");
                 let coeff = if parent_tag != "figcaption" {
                     let href = doc.attr(n, "href").unwrap_or("").trim().to_string();
-                    if href.len() > 1 && href.starts_with('#') { 0.3 } else { 1.0 }
+                    if href.len() > 1 && href.starts_with('#') {
+                        0.3
+                    } else {
+                        1.0
+                    }
                 } else {
                     0.0
                 };
                 let mut my_acc = CharCounter::new();
                 for child in doc.child_nodes(n) {
                     walk_cond(
-                        doc, child, stats, new_in_text, new_in_list, new_in_heading,
-                        coeff, &mut my_acc, is_video_fn,
+                        doc,
+                        child,
+                        stats,
+                        new_in_text,
+                        new_in_list,
+                        new_in_heading,
+                        coeff,
+                        &mut my_acc,
+                        is_video_fn,
                     );
                 }
                 stats.link_chars_weighted += my_acc.total() as f64 * coeff;
             } else {
                 for child in doc.child_nodes(n) {
                     walk_cond(
-                        doc, child, stats, new_in_text, new_in_list, new_in_heading,
-                        link_coeff, link_acc, is_video_fn,
+                        doc,
+                        child,
+                        stats,
+                        new_in_text,
+                        new_in_list,
+                        new_in_heading,
+                        link_coeff,
+                        link_acc,
+                        is_video_fn,
                     );
                 }
             }
@@ -2915,8 +3089,7 @@ fn clone_node(doc: &mut Document, id: NodeId) -> NodeId {
                     value: v.clone(),
                 })
                 .collect();
-            let new_el =
-                scraper::node::Element::new(new_name, attrs);
+            let new_el = scraper::node::Element::new(new_name, attrs);
             let new_id = doc.html.tree.orphan(Node::Element(new_el)).id();
             // Clone children.
             let children: Vec<NodeId> = doc.child_nodes(id);
@@ -2945,12 +3118,10 @@ fn find_content_in_node(doc: &Document, id: NodeId) -> bool {
         return false;
     };
     match node.value() {
-        Node::Element(el) => {
-            match el.name() {
-                "img" | "picture" | "embed" | "object" | "iframe" => return true,
-                _ => {}
-            }
-        }
+        Node::Element(el) => match el.name() {
+            "img" | "picture" | "embed" | "object" | "iframe" => return true,
+            _ => {}
+        },
         Node::Text(_) => {
             if has_text_content(doc, id) {
                 return true;
@@ -2997,10 +3168,14 @@ fn html_unescape(s: &str) -> String {
         .replace_all(s, |caps: &regex::Captures| {
             if let Some(hex) = caps.get(1) {
                 let code = u32::from_str_radix(hex.as_str(), 16).unwrap_or(0xFFFD);
-                char::from_u32(code).map(|c| c.to_string()).unwrap_or_else(|| "\u{FFFD}".to_string())
+                char::from_u32(code)
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "\u{FFFD}".to_string())
             } else if let Some(dec) = caps.get(2) {
                 let code: u32 = dec.as_str().parse().unwrap_or(0xFFFD);
-                char::from_u32(code).map(|c| c.to_string()).unwrap_or_else(|| "\u{FFFD}".to_string())
+                char::from_u32(code)
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "\u{FFFD}".to_string())
             } else if let Some(name) = caps.get(3) {
                 named_html_entity(name.as_str())
                     .map(|s| s.to_string())
@@ -3014,16 +3189,27 @@ fn html_unescape(s: &str) -> String {
 
 fn named_html_entity(name: &str) -> Option<&'static str> {
     Some(match name {
-        "amp" => "&", "lt" => "<", "gt" => ">",
-        "quot" => "\"", "apos" => "'",
-        "nbsp" => "\u{00A0}", "shy" => "\u{00AD}",
-        "mdash" => "\u{2014}", "ndash" => "\u{2013}",
-        "lsquo" => "\u{2018}", "rsquo" => "\u{2019}",
-        "ldquo" => "\u{201C}", "rdquo" => "\u{201D}",
-        "hellip" => "\u{2026}", "bull" => "\u{2022}",
-        "copy" => "\u{00A9}", "reg" => "\u{00AE}",
-        "trade" => "\u{2122}", "euro" => "\u{20AC}",
-        "pound" => "\u{00A3}", "yen" => "\u{00A5}",
+        "amp" => "&",
+        "lt" => "<",
+        "gt" => ">",
+        "quot" => "\"",
+        "apos" => "'",
+        "nbsp" => "\u{00A0}",
+        "shy" => "\u{00AD}",
+        "mdash" => "\u{2014}",
+        "ndash" => "\u{2013}",
+        "lsquo" => "\u{2018}",
+        "rsquo" => "\u{2019}",
+        "ldquo" => "\u{201C}",
+        "rdquo" => "\u{201D}",
+        "hellip" => "\u{2026}",
+        "bull" => "\u{2022}",
+        "copy" => "\u{00A9}",
+        "reg" => "\u{00AE}",
+        "trade" => "\u{2122}",
+        "euro" => "\u{20AC}",
+        "pound" => "\u{00A3}",
+        "yen" => "\u{00A5}",
         "cent" => "\u{00A2}",
         _ => return None,
     })
@@ -3068,39 +3254,13 @@ mod tests {
         assert_eq!(html_unescape(s), s);
     }
 
-    // ── text_similarity ────────────────────────────────────────────────────
-
-    #[test]
-    fn text_similarity_identical_is_one() {
-        let p = make_parser();
-        assert!((p.text_similarity("hello world", "hello world") - 1.0).abs() < 1e-9);
-    }
-
-    #[test]
-    fn text_similarity_disjoint_is_zero() {
-        let p = make_parser();
-        assert!((p.text_similarity("foo bar", "baz qux")).abs() < 1e-9);
-    }
-
-    #[test]
-    fn text_similarity_cjk_treated_as_delimiter() {
-        // Go RE2 \W is ASCII-only, so Chinese characters act as token delimiters.
-        // "hello" appears in both strings; the Chinese characters are delimiters.
-        // Similarity should be 1.0 since all tokens of b ("hello") are in a.
-        let p = make_parser();
-        let sim = p.text_similarity("hello新电脑_suffix", "hello新电脑");
-        assert!(
-            sim > 0.75,
-            "expected similarity > 0.75 for CJK-delimited strings, got {sim}"
-        );
-    }
-
     // ── get_article_title ──────────────────────────────────────────────────
 
     #[test]
     fn get_article_title_simple() {
         let mut p = make_parser();
-        let doc = Document::parse("<html><head><title>Hello World</title></head><body></body></html>");
+        let doc =
+            Document::parse("<html><head><title>Hello World</title></head><body></body></html>");
         p.doc = doc;
         assert_eq!(p.get_article_title(), "Hello World");
     }
@@ -3127,7 +3287,10 @@ mod tests {
         p.remove_comments();
         let body = p.doc.body().unwrap();
         let html = p.doc.inner_html(body);
-        assert!(!html.contains("hidden"), "comment should be removed: {html}");
+        assert!(
+            !html.contains("hidden"),
+            "comment should be removed: {html}"
+        );
         assert!(html.contains("visible"), "text should remain: {html}");
     }
 
@@ -3156,7 +3319,8 @@ mod tests {
     #[test]
     fn clean_classes_removes_non_preserved() {
         let mut p = make_parser();
-        p.doc = Document::parse(r#"<html><body><div class="foo page bar">text</div></body></html>"#);
+        p.doc =
+            Document::parse(r#"<html><body><div class="foo page bar">text</div></body></html>"#);
         let body = p.doc.body().unwrap();
         let div = p.doc.first_element_child(body).unwrap();
         p.clean_classes(div);
@@ -3174,7 +3338,12 @@ mod tests {
         p.doc = Document::parse(r#"<html><body><a href="/page">link</a></body></html>"#);
         let body = p.doc.body().unwrap();
         p.fix_relative_uris(body);
-        let a = p.doc.get_elements_by_tag_name(body, "a").into_iter().next().unwrap();
+        let a = p
+            .doc
+            .get_elements_by_tag_name(body, "a")
+            .into_iter()
+            .next()
+            .unwrap();
         assert_eq!(p.doc.attr(a, "href"), Some("https://example.com/page"));
     }
 
@@ -3183,7 +3352,8 @@ mod tests {
         let base = Url::parse("https://example.com/").unwrap();
         let mut p = make_parser();
         p.document_uri = Some(base);
-        p.doc = Document::parse(r#"<html><body><a href="javascript:void(0)">click</a></body></html>"#);
+        p.doc =
+            Document::parse(r#"<html><body><a href="javascript:void(0)">click</a></body></html>"#);
         let body = p.doc.body().unwrap();
         p.fix_relative_uris(body);
         // The <a> should be replaced with a text node or <span>
@@ -3246,7 +3416,13 @@ mod tests {
         );
         let mut p = make_parser();
         let article = p.parse(&html, None).unwrap();
-        assert!(article.length > 0, "grab_article should produce content, got length=0");
-        assert!(article.content.contains("quick brown fox"), "content should include article text");
+        assert!(
+            article.length > 0,
+            "grab_article should produce content, got length=0"
+        );
+        assert!(
+            article.content.contains("quick brown fox"),
+            "content should include article text"
+        );
     }
 }

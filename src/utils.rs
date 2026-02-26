@@ -4,12 +4,6 @@ use url::Url;
 
 use crate::regexp::RX_TOKENIZE;
 
-/// Port of indexOf — returns the index of the first occurrence of `target` in `slice`,
-/// or `None` if not found.
-pub fn index_of(slice: &[&str], target: &str) -> Option<usize> {
-    slice.iter().position(|&s| s == target)
-}
-
 /// Port of wordCount — splits on whitespace and counts words.
 pub fn word_count(s: &str) -> usize {
     s.split_whitespace().count()
@@ -94,7 +88,11 @@ pub fn to_absolute_uri(uri: &str, base: &Url) -> String {
 
 /// Port of strOr — returns the first non-empty string from the slice.
 pub fn str_or<'a>(candidates: &[&'a str]) -> &'a str {
-    candidates.iter().copied().find(|s| !s.is_empty()).unwrap_or("")
+    candidates
+        .iter()
+        .copied()
+        .find(|s| !s.is_empty())
+        .unwrap_or("")
 }
 
 /// Port of textSimilarity — character-count-based similarity in `[0.0, 1.0]`.
@@ -149,19 +147,6 @@ pub fn text_similarity(a: &str, b: &str) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn index_of_finds_first_occurrence() {
-        let sample: Vec<&str> = "hello this is a simple sentence and we try to repeat some simple word like this"
-            .split_whitespace()
-            .collect();
-        assert_eq!(index_of(&sample, "hello"), Some(0));
-        assert_eq!(index_of(&sample, "this"), Some(1));
-        assert_eq!(index_of(&sample, "simple"), Some(4));
-        assert_eq!(index_of(&sample, "we"), Some(7));
-        assert_eq!(index_of(&sample, "repeat"), Some(10));
-        assert_eq!(index_of(&sample, "notfound"), None);
-    }
 
     #[test]
     fn word_count_counts_words() {
@@ -292,6 +277,18 @@ mod tests {
         assert!(
             (sim - expected).abs() < 1e-9,
             "expected ~{expected:.4}, got {sim}"
+        );
+    }
+
+    #[test]
+    fn text_similarity_cjk_treated_as_delimiter() {
+        // Go RE2 \W is ASCII-only, so Chinese characters act as token delimiters.
+        // "hello" appears in both strings; the Chinese characters are delimiters.
+        // Similarity should be 1.0 since all tokens of b ("hello") are in a.
+        let sim = text_similarity("hello新电脑_suffix", "hello新电脑");
+        assert!(
+            sim > 0.75,
+            "expected similarity > 0.75 for CJK-delimited strings, got {sim}"
         );
     }
 

@@ -27,7 +27,10 @@ static RX_MAYBE_CANDIDATE: LazyLock<Regex> = LazyLock::new(|| {
 // Port of class-weight.re — IsPositiveClass
 // Original pattern: (?i)article|body|content|entry|hentry|h-entry|main|page|pagination|post|text|blog|story
 static RX_POSITIVE_CLASS: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)article|body|content|entry|hentry|h-entry|main|page|pagination|post|text|blog|story").unwrap()
+    Regex::new(
+        r"(?i)article|body|content|entry|hentry|h-entry|main|page|pagination|post|text|blog|story",
+    )
+    .unwrap()
 });
 
 // Port of class-weight.re — IsNegativeClass (anchored part)
@@ -63,11 +66,9 @@ pub static RX_VIDEOS: LazyLock<Regex> = LazyLock::new(|| {
 // so non-ASCII characters (e.g. Chinese) are treated as word delimiters. Mirror that
 // behavior with an explicit ASCII-only negated class so split points are at valid
 // Unicode codepoint boundaries (unlike (?-u)\W+ which splits at bytes).
-pub static RX_TOKENIZE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"[^a-zA-Z0-9_]+").unwrap());
+pub static RX_TOKENIZE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[^a-zA-Z0-9_]+").unwrap());
 
-pub static RX_HAS_CONTENT: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)\S$").unwrap());
+pub static RX_HAS_CONTENT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\S$").unwrap());
 
 pub static RX_PROPERTY_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)\s*(dc|dcterm|og|article|twitter)\s*:\s*(author|creator|description|title|site_name|published_time|modified_time|image\S*)\s*").unwrap()
@@ -119,9 +120,8 @@ pub static RX_IMG_EXTENSIONS: LazyLock<Regex> =
 pub static RX_SRCSET_URL: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)(\S+)(\s+[\d.]+[xw])?(\s*(?:,|$))").unwrap());
 
-pub static RX_B64_DATA_URL: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)^data:\s*([^\s;,]+)\s*;\s*base64\s*,").unwrap()
-});
+pub static RX_B64_DATA_URL: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)^data:\s*([^\s;,]+)\s*;\s*base64\s*,").unwrap());
 
 pub static RX_JSON_LD_ARTICLE_TYPES: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)^Article|AdvertiserContentArticle|NewsArticle|AnalysisNewsArticle|AskPublicNewsArticle|BackgroundNewsArticle|OpinionNewsArticle|ReportageNewsArticle|ReviewNewsArticle|Report|SatiricalArticle|ScholarlyArticle|MedicalScholarlyArticle|SocialMediaPosting|BlogPosting|LiveBlogPosting|DiscussionForumPosting|TechArticle|APIReference$").unwrap()
@@ -201,13 +201,7 @@ mod tests {
             "meta-prep-author",
             "writtenbynames",
         ];
-        let no = [
-            "article-line",
-            "autor",
-            "bynames",
-            "date",
-            "meta-autor",
-        ];
+        let no = ["article-line", "autor", "bynames", "date", "meta-autor"];
         for s in yes {
             for v in both_cases(s) {
                 assert!(is_byline(&v), "IsByline({v:?}) should be true");
@@ -223,21 +217,47 @@ mod tests {
     #[test]
     fn is_positive_class_matches() {
         let yes = [
-            "article", "blog", "body", "content", "entry", "h-entry",
-            "hentry", "main", "page", "pagination", "post", "story", "text",
+            "article",
+            "blog",
+            "body",
+            "content",
+            "entry",
+            "h-entry",
+            "hentry",
+            "main",
+            "page",
+            "pagination",
+            "post",
+            "story",
+            "text",
         ];
         let no = [
-            "container", "description", "footer", "gallery", "header",
-            "layout", "navigation", "news", "sidebar", "toolbar", "widget",
+            "container",
+            "description",
+            "footer",
+            "gallery",
+            "header",
+            "layout",
+            "navigation",
+            "news",
+            "sidebar",
+            "toolbar",
+            "widget",
         ];
         for s in yes {
             for v in both_cases(s) {
-                assert!(is_positive_class(&v), "IsPositiveClass({v:?}) should be true");
+                assert!(
+                    is_positive_class(&v),
+                    "IsPositiveClass({v:?}) should be true"
+                );
             }
         }
         for s in no {
             for v in both_cases(s) {
-                assert!(!is_positive_class(&v), "IsPositiveClass({v:?}) should be false");
+                assert!(
+                    !is_positive_class(&v),
+                    "IsPositiveClass({v:?}) should be false"
+                );
             }
         }
     }
@@ -245,26 +265,68 @@ mod tests {
     #[test]
     fn is_negative_class_matches() {
         let yes = [
-            "-ad-", "ad-banner", "banner", "class hid good", "class hid",
-            "com-", "combx", "comment", "contact", "d-none", "footer",
-            "gdpr", "hid class", "hid", "hidden", "masthead", "meta",
-            "outbrain", "promo", "related", "share", "shopping", "shoutbox",
-            "sidebar", "skyscraper", "sponsor", "tags", "widget",
+            "-ad-",
+            "ad-banner",
+            "banner",
+            "class hid good",
+            "class hid",
+            "com-",
+            "combx",
+            "comment",
+            "contact",
+            "d-none",
+            "footer",
+            "gdpr",
+            "hid class",
+            "hid",
+            "hidden",
+            "masthead",
+            "meta",
+            "outbrain",
+            "promo",
+            "related",
+            "share",
+            "shopping",
+            "shoutbox",
+            "sidebar",
+            "skyscraper",
+            "sponsor",
+            "tags",
+            "widget",
         ];
         let no = [
-            "catalog", "details", "foot", "footnote", "gallery", "media",
-            "navbar", "news-feed", "overview", "profile", "scroll",
-            "sad-nonet", "support", "tool", "toolbar", "user-menu",
+            "catalog",
+            "details",
+            "foot",
+            "footnote",
+            "gallery",
+            "media",
+            "navbar",
+            "news-feed",
+            "overview",
+            "profile",
+            "scroll",
+            "sad-nonet",
+            "support",
+            "tool",
+            "toolbar",
+            "user-menu",
             "visually-hidden",
         ];
         for s in yes {
             for v in both_cases(s) {
-                assert!(is_negative_class(&v), "IsNegativeClass({v:?}) should be true");
+                assert!(
+                    is_negative_class(&v),
+                    "IsNegativeClass({v:?}) should be true"
+                );
             }
         }
         for s in no {
             for v in both_cases(s) {
-                assert!(!is_negative_class(&v), "IsNegativeClass({v:?}) should be false");
+                assert!(
+                    !is_negative_class(&v),
+                    "IsNegativeClass({v:?}) should be false"
+                );
             }
         }
     }
@@ -272,16 +334,47 @@ mod tests {
     #[test]
     fn is_unlikely_candidate_matches() {
         let yes = [
-            "-ad-", "ad-banner", "ad-break", "agegate", "ai2html", "banner",
-            "breadcrumbs", "combx", "comment", "community", "cover-wrap",
-            "disqus", "extra", "footer", "gdpr", "header", "legends", "menu",
-            "pager", "pagination", "popup", "related", "remark", "replies",
-            "rss", "shoutbox", "sidebar", "skyscraper", "social", "sponsor",
-            "supplemental", "yom-remote",
+            "-ad-",
+            "ad-banner",
+            "ad-break",
+            "agegate",
+            "ai2html",
+            "banner",
+            "breadcrumbs",
+            "combx",
+            "comment",
+            "community",
+            "cover-wrap",
+            "disqus",
+            "extra",
+            "footer",
+            "gdpr",
+            "header",
+            "legends",
+            "menu",
+            "pager",
+            "pagination",
+            "popup",
+            "related",
+            "remark",
+            "replies",
+            "rss",
+            "shoutbox",
+            "sidebar",
+            "skyscraper",
+            "social",
+            "sponsor",
+            "supplemental",
+            "yom-remote",
         ];
         let no = [
-            "catalog", "container", "gallery", "newsfeed", "overview",
-            "summary", "toolbar",
+            "catalog",
+            "container",
+            "gallery",
+            "newsfeed",
+            "overview",
+            "summary",
+            "toolbar",
         ];
         for s in yes {
             for v in both_cases(s) {
@@ -303,7 +396,9 @@ mod tests {
 
     #[test]
     fn maybe_its_a_candidate_matches() {
-        let yes = ["and", "article", "body", "column", "content", "main", "shadow"];
+        let yes = [
+            "and", "article", "body", "column", "content", "main", "shadow",
+        ];
         let no = ["footer", "gallery", "header", "menu", "navbar", "text"];
         for s in yes {
             for v in both_cases(s) {

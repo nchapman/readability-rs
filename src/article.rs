@@ -8,6 +8,7 @@
 ///
 /// Port of `Article`.
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct Article {
     pub title: String,
     pub byline: String,

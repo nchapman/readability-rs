@@ -62,8 +62,7 @@ fn bench_yahoo_2(c: &mut Criterion) {
 // ── full fixture suite throughput ─────────────────────────────────────────────
 
 fn bench_all_fixtures(c: &mut Criterion) {
-    let fixtures_dir =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("test-pages");
+    let fixtures_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("test-pages");
     let url = Url::parse("http://fakehost/test/page.html").unwrap();
 
     // Collect all fixture pages that have a source.html.

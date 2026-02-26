@@ -61,9 +61,7 @@ fn render(doc: &Document, id: NodeId, keep_whitespace: bool, tb: &mut InnerTextB
                     // Go's textContent collects only direct text-node children (not recursive),
                     // so mirror that with direct_text_content rather than the deep collector.
                     let is_block = el.attr("display") == Some("block");
-                    if let Some(annotation_id) =
-                        find_annotation(doc, id, "application/x-tex")
-                    {
+                    if let Some(annotation_id) = find_annotation(doc, id, "application/x-tex") {
                         let content = direct_text_content(doc, annotation_id);
                         render_tex(&content, is_block, tb);
                     }
@@ -101,8 +99,8 @@ fn render(doc: &Document, id: NodeId, keep_whitespace: bool, tb: &mut InnerTextB
                 }
                 "div" | "figure" | "figcaption" | "picture" | "li" | "dt" | "dd" | "header"
                 | "footer" | "main" | "section" | "article" | "aside" | "nav" | "address"
-                | "details" | "summary" | "dialog" | "form" | "fieldset" | "caption"
-                | "thead" | "tbody" | "tfoot" | "tr" => {
+                | "details" | "summary" | "dialog" | "form" | "fieldset" | "caption" | "thead"
+                | "tbody" | "tfoot" | "tr" => {
                     tb.write_newline(1, true);
                 }
                 _ => {}
@@ -360,7 +358,10 @@ mod tests {
     fn display_none_content_absent() {
         // aria-hidden="true" is how our inner_text hides elements
         let s = render_body(r#"<p aria-hidden="true">secret</p><p>visible</p>"#);
-        assert!(!s.contains("secret"), "hidden content should be absent: {s:?}");
+        assert!(
+            !s.contains("secret"),
+            "hidden content should be absent: {s:?}"
+        );
         assert!(s.contains("visible"), "got: {s:?}");
     }
 
@@ -396,7 +397,10 @@ mod tests {
     fn script_elements_without_mathjax_are_empty() {
         // Inline script in body context
         let s = render_body(r#"<p><script>alert("xss")</script></p><p>text</p>"#);
-        assert!(!s.contains("alert"), "script content should be skipped: {s:?}");
+        assert!(
+            !s.contains("alert"),
+            "script content should be skipped: {s:?}"
+        );
         assert!(s.contains("text"), "got: {s:?}");
     }
 
@@ -409,7 +413,10 @@ mod tests {
     #[test]
     fn pre_preserves_whitespace() {
         let s = render_body("<pre>  indented\n  code</pre>");
-        assert!(s.contains("  indented"), "pre should preserve indentation: {s:?}");
+        assert!(
+            s.contains("  indented"),
+            "pre should preserve indentation: {s:?}"
+        );
     }
 
     #[test]

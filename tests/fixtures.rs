@@ -31,9 +31,15 @@ struct ExpectedMeta {
     #[serde(rename = "siteName", deserialize_with = "deserialize_nullable_string")]
     site_name: String,
     readerable: bool,
-    #[serde(rename = "publishedTime", deserialize_with = "deserialize_nullable_string")]
+    #[serde(
+        rename = "publishedTime",
+        deserialize_with = "deserialize_nullable_string"
+    )]
     published_time: String,
-    #[serde(rename = "modifiedTime", deserialize_with = "deserialize_nullable_string")]
+    #[serde(
+        rename = "modifiedTime",
+        deserialize_with = "deserialize_nullable_string"
+    )]
     modified_time: String,
 }
 
@@ -75,11 +81,13 @@ fn compare_html(extracted: &str, expected_html_str: &str, case_name: &str) {
 
     // Step 1: check direct element-child count of the document root.
     // In Go: `len(dom.Children(result))` == `len(dom.Children(expected))`.
-    let got_root_children = doc_got.root_element()
+    let got_root_children = doc_got
+        .root_element()
         .children()
         .filter(|n| n.value().is_element())
         .count();
-    let exp_root_children = doc_exp.root_element()
+    let exp_root_children = doc_exp
+        .root_element()
         .children()
         .filter(|n| n.value().is_element())
         .count();
@@ -93,11 +101,15 @@ fn compare_html(extracted: &str, expected_html_str: &str, case_name: &str) {
     // Step 2: collect ELEMENT-ONLY nodes in DFS order.
     // Go's `getNextNode` uses FirstElementChild / NextElementSibling so it never
     // visits bare text nodes.  We replicate that by filtering to elements only.
-    let got_elems: Vec<_> = doc_got.tree.root()
+    let got_elems: Vec<_> = doc_got
+        .tree
+        .root()
         .descendants()
         .filter(|n| n.value().is_element())
         .collect();
-    let exp_elems: Vec<_> = doc_exp.tree.root()
+    let exp_elems: Vec<_> = doc_exp
+        .tree
+        .root()
         .descendants()
         .filter(|n| n.value().is_element())
         .collect();
@@ -109,17 +121,19 @@ fn compare_html(extracted: &str, expected_html_str: &str, case_name: &str) {
         let e_el = exp.value().as_element().unwrap();
 
         // ── Tag name ──────────────────────────────────────────────────────
-        assert_eq!(
-            g_el.name(),
-            e_el.name(),
-            "[{case_name}] tag name mismatch"
-        );
+        assert_eq!(g_el.name(), e_el.name(), "[{case_name}] tag name mismatch");
 
         // ── Attribute count ───────────────────────────────────────────────
         let g_attr_count = g_el.attrs().filter(|(k, _)| !is_ns_attr(k)).count();
         let e_attr_count = e_el.attrs().filter(|(k, _)| !is_ns_attr(k)).count();
-        let g_attrs_str: Vec<_> = g_el.attrs().map(|(k,v)| format!("{}={:?}", k, v)).collect();
-        let e_attrs_str: Vec<_> = e_el.attrs().map(|(k,v)| format!("{}={:?}", k, v)).collect();
+        let g_attrs_str: Vec<_> = g_el
+            .attrs()
+            .map(|(k, v)| format!("{}={:?}", k, v))
+            .collect();
+        let e_attrs_str: Vec<_> = e_el
+            .attrs()
+            .map(|(k, v)| format!("{}={:?}", k, v))
+            .collect();
         assert_eq!(
             g_attr_count,
             e_attr_count,
@@ -271,8 +285,7 @@ fn run_fixture(name: &str) {
 
     // Readability check.
     assert_eq!(
-        is_readerable,
-        meta.readerable,
+        is_readerable, meta.readerable,
         "[{name}] readerable mismatch: got {is_readerable} want {}",
         meta.readerable
     );
@@ -289,13 +302,11 @@ fn run_fixture(name: &str) {
     assert_eq!(article.byline, meta.byline, "[{name}] byline mismatch");
     assert_eq!(article.excerpt, meta.excerpt, "[{name}] excerpt mismatch");
     assert_eq!(
-        article.site_name,
-        meta.site_name,
+        article.site_name, meta.site_name,
         "[{name}] site_name mismatch"
     );
     assert_eq!(
-        article.language,
-        meta.language,
+        article.language, meta.language,
         "[{name}] language mismatch"
     );
     // Mirror Go: parse both timestamps semantically so equivalent formats

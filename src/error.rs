@@ -1,6 +1,7 @@
 // Error types for readability-rs
 
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum Error {
     #[error("HTML parse error: {0}")]
     Parse(String),
