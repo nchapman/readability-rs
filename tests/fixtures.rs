@@ -283,48 +283,35 @@ fn run_fixture(name: &str) {
     // differences cancel out.
     compare_html(&article.content, &expected_html, name);
 
-    // Metadata comparisons — only assert when the expected value is non-empty.
-    if !meta.title.is_empty() {
-        assert_eq!(article.title, meta.title, "[{name}] title mismatch");
-    }
-    if !meta.byline.is_empty() {
-        assert_eq!(article.byline, meta.byline, "[{name}] byline mismatch");
-    }
-    if !meta.excerpt.is_empty() {
-        assert_eq!(article.excerpt, meta.excerpt, "[{name}] excerpt mismatch");
-    }
-    if !meta.site_name.is_empty() {
-        assert_eq!(
-            article.site_name,
-            meta.site_name,
-            "[{name}] site_name mismatch"
-        );
-    }
-    if !meta.language.is_empty() {
-        assert_eq!(
-            article.language,
-            meta.language,
-            "[{name}] language mismatch"
-        );
-    }
-    if !meta.published_time.is_empty() {
-        // Mirror Go: parse both timestamps semantically so equivalent formats
-        // compare equal ("2020-01-01T00:00:00.000Z" == "2020-01-01T00:00:00Z").
-        // Fall back to string comparison when parsing fails (both must succeed
-        // for semantic comparison to kick in).
-        assert_times_equal(
-            &article.published_time,
-            &meta.published_time,
-            &format!("[{name}] published_time mismatch"),
-        );
-    }
-    if !meta.modified_time.is_empty() {
-        assert_times_equal(
-            &article.modified_time,
-            &meta.modified_time,
-            &format!("[{name}] modified_time mismatch"),
-        );
-    }
+    // Metadata comparisons — assert all fields unconditionally, matching Go's behavior.
+    // If the expected value is empty, the parser must also return empty (no false positives).
+    assert_eq!(article.title, meta.title, "[{name}] title mismatch");
+    assert_eq!(article.byline, meta.byline, "[{name}] byline mismatch");
+    assert_eq!(article.excerpt, meta.excerpt, "[{name}] excerpt mismatch");
+    assert_eq!(
+        article.site_name,
+        meta.site_name,
+        "[{name}] site_name mismatch"
+    );
+    assert_eq!(
+        article.language,
+        meta.language,
+        "[{name}] language mismatch"
+    );
+    // Mirror Go: parse both timestamps semantically so equivalent formats
+    // compare equal ("2020-01-01T00:00:00.000Z" == "2020-01-01T00:00:00Z").
+    // Falls back to string comparison when parsing fails (both empty → both fail
+    // to parse → assert_eq!("", "") passes).
+    assert_times_equal(
+        &article.published_time,
+        &meta.published_time,
+        &format!("[{name}] published_time mismatch"),
+    );
+    assert_times_equal(
+        &article.modified_time,
+        &meta.modified_time,
+        &format!("[{name}] modified_time mismatch"),
+    );
 }
 
 // ── Individual test functions (one per fixture directory) ─────────────────────
