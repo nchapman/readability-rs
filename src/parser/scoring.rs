@@ -17,11 +17,23 @@ impl Parser {
         // Save a pristine snapshot to restore at the start of each pass.
         let base_doc = self.doc.clone();
 
+        let mut pass_num: u32 = 0;
+
         loop {
+            pass_num += 1;
             // Restore the document to a clean state for this pass.
             self.doc = base_doc.clone();
             self.score_map.clear();
             self.data_tables.clear();
+
+            #[cfg(feature = "tracing")]
+            tracing::debug!(
+                pass = pass_num,
+                strip_unlikelys = self.flags.strip_unlikelys,
+                use_weight_classes = self.flags.use_weight_classes,
+                clean_conditionally = self.flags.clean_conditionally,
+                "grab_article: starting pass"
+            );
 
             let page = self.doc.body()?;
 
@@ -305,6 +317,18 @@ impl Parser {
                 .collect();
 
             // ── Top candidate selection ───────────────────────────────────
+            #[cfg(feature = "tracing")]
+            {
+                for (i, &cand) in top_candidates.iter().enumerate() {
+                    tracing::trace!(
+                        rank = i + 1,
+                        tag = %self.doc.tag_name(cand),
+                        score = self.get_content_score(cand),
+                        "grab_article: candidate"
+                    );
+                }
+            }
+
             let mut top_candidate: Option<NodeId> = top_candidates.first().copied();
             let mut needed_to_create_top_candidate = false;
 
@@ -514,6 +538,14 @@ impl Parser {
             // ── Length check and flag cycling ─────────────────────────────
             let (text_length, _) =
                 crate::traverse::count_chars_and_commas(&self.doc, article_content);
+
+            #[cfg(feature = "tracing")]
+            tracing::debug!(
+                pass = pass_num,
+                text_length,
+                threshold = self.char_threshold,
+                "grab_article: pass result"
+            );
 
             if text_length < self.char_threshold {
                 let doc_snap = self.doc.clone();

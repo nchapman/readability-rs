@@ -35,8 +35,12 @@ chrono = { version = "0.4", features = ["serde"] }
 # Error types
 thiserror = "2"
 
-# Logging (port of go-readability's slog structured logger)
-tracing = "0.1"
+# Logging (optional — zero-cost when disabled)
+tracing = { version = "0.1", optional = true }
+
+[features]
+default = []
+tracing = ["dep:tracing"]
 
 [dev-dependencies]
 pretty_assertions = "1"

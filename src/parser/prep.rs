@@ -51,6 +51,8 @@ impl Parser {
 
         let root = self.doc.root();
         let styles = self.doc.get_elements_by_tag_name(root, "style");
+        #[cfg(feature = "tracing")]
+        tracing::debug!(count = styles.len(), "prep_document: removing <style> elements");
         self.remove_nodes(styles, None::<fn(&Document, NodeId) -> bool>);
 
         if let Some(body) = self.doc.body() {
@@ -59,6 +61,8 @@ impl Parser {
 
         let root = self.doc.root();
         let fonts = self.doc.get_elements_by_tag_name(root, "font");
+        #[cfg(feature = "tracing")]
+        tracing::debug!(count = fonts.len(), "prep_document: replacing <font> with <span>");
         self.replace_node_tags(fonts, "span");
     }
 

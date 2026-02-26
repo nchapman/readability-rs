@@ -242,6 +242,13 @@ impl Parser {
         let nodes = self.doc.get_elements_by_tag_name(root, tag);
         for &node in nodes.iter().rev() {
             if self.doc.parent(node).is_some() && self.should_clean_conditionally(node, tag) {
+                #[cfg(feature = "tracing")]
+                tracing::trace!(
+                    tag,
+                    class = %self.doc.attr(node, "class").unwrap_or(""),
+                    id = %self.doc.attr(node, "id").unwrap_or(""),
+                    "clean_conditionally: removing node"
+                );
                 self.doc.remove(node);
             }
         }
