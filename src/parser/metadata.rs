@@ -31,7 +31,6 @@ pub(super) struct JsonLdMetadata {
     pub(super) excerpt: String,
     pub(super) site_name: String,
     pub(super) date_published: String,
-    pub(super) date_modified: String,
 }
 
 impl Parser {
@@ -443,8 +442,8 @@ impl Parser {
         ])
         .to_string();
 
+        // Go's getJSONLD never extracts dateModified, so no JSON-LD fallback here.
         let metadata_modified_time = str_or(&[
-            &json_ld.date_modified,
             v("article:modified_time"),
             v("dcterms.modified"),
         ])

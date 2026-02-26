@@ -196,23 +196,22 @@ impl Parser {
 
         // Excerpt fallback: if metadata has no excerpt, use InnerText of the first <p>
         // in the article content. Port of Go's `article.Excerpt()` lazy fallback.
-        let excerpt_meta = metadata.excerpt.clone();
-        let excerpt = if excerpt_meta.is_empty() {
+        let excerpt = if metadata.excerpt.is_empty() {
             // Find the first <p> inside the readable node.
             let readable_for_excerpt =
                 article_content.and_then(|cid| self.doc.first_element_child(cid));
             let first_p = readable_for_excerpt.and_then(|r| self.get_element_by_tag_name(r, "p"));
             if let Some(p) = first_p {
                 let p_text = inner_text(&self.doc, p);
-                let normalized: String = p_text.split_whitespace().collect::<Vec<_>>().join(" ");
-                normalized
+                p_text.split_whitespace().collect::<Vec<_>>().join(" ")
             } else {
                 String::new()
             }
         } else {
             // Mirror Go's `article.Excerpt()`: always normalize whitespace
             // with strings.Fields semantics regardless of source.
-            excerpt_meta
+            metadata
+                .excerpt
                 .split_whitespace()
                 .collect::<Vec<_>>()
                 .join(" ")

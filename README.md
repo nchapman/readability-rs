@@ -47,6 +47,7 @@ The `Article` struct contains:
 | `image` | Lead image URL |
 | `language` | Detected language |
 | `published_time` | Publication timestamp |
+| `modified_time` | Last modified timestamp |
 | `dir` | Text direction (`ltr` or `rtl`) |
 
 ## Configuration
@@ -58,9 +59,9 @@ use readability::Parser;
 
 // Builder style
 let mut parser = Parser::new()
-    .char_threshold(200)
-    .keep_classes(true)
-    .disable_jsonld(true);
+    .with_char_threshold(200)
+    .with_keep_classes(true)
+    .with_disable_jsonld(true);
 
 // Or set fields directly
 let mut parser = Parser::new();
