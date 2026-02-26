@@ -28,56 +28,6 @@ impl Document {
         }
     }
 
-    /// Create a Document from an existing ego-tree (avoids re-parsing HTML).
-    pub fn from_tree(tree: ego_tree::Tree<scraper::Node>) -> Self {
-        let mut html = Html::new_document();
-        html.tree = tree;
-        Self { html }
-    }
-
-    /// Clone a subtree rooted at `id` into a well-formed document tree.
-    ///
-    /// Returns a tree with `Document → html → body → [cloned subtree]` structure,
-    /// so the result can be wrapped in a `Document` and navigated normally
-    /// (e.g., `doc.body()` works). Used by `parse_tree` to extract the article content.
-    pub fn clone_subtree(&self, id: NodeId) -> ego_tree::Tree<scraper::Node> {
-        // Build a minimal document envelope: Document → html → body.
-        let mut new_doc = Self::parse("<html><body></body></html>");
-        let body = new_doc.body().expect("clone_subtree: body missing in envelope");
-
-        // Clone the source subtree rooted at `id` into the body.
-        let src_node = self.html.tree.get(id).expect("clone_subtree: invalid NodeId");
-        let cloned_root = new_doc.html.tree.get_mut(body)
-            .unwrap()
-            .append(src_node.value().clone())
-            .id();
-        Self::clone_children_into(&self.html.tree, id, cloned_root, &mut new_doc.html.tree);
-
-        new_doc.html.tree
-    }
-
-    /// Recursively clone children from `src_parent` into `dst_parent` in `dst_tree`.
-    fn clone_children_into(
-        src: &ego_tree::Tree<scraper::Node>,
-        src_parent: NodeId,
-        dst_parent: NodeId,
-        dst: &mut ego_tree::Tree<scraper::Node>,
-    ) {
-        let Some(parent_node) = src.get(src_parent) else { return };
-        for child in parent_node.children() {
-            let new_child_id = dst.get_mut(dst_parent)
-                .unwrap()
-                .append(child.value().clone())
-                .id();
-            Self::clone_children_into(src, child.id(), new_child_id, dst);
-        }
-    }
-
-    /// Consume the Document and return the underlying ego-tree.
-    pub fn into_tree(self) -> ego_tree::Tree<scraper::Node> {
-        self.html.tree
-    }
-
     /// The root node of the tree (Document node, not the `<html>` element).
     pub fn root(&self) -> NodeId {
         self.html.tree.root().id()
