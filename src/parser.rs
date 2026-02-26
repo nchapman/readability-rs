@@ -943,14 +943,10 @@ impl Parser {
         }
 
         // If `<p>` ended up inside another `<p>`, promote parent to `<div>`.
-        if self
-            .doc
-            .parent(p)
-            .map(|par| self.doc.tag_name(par) == "p")
-            .unwrap_or(false)
-        {
-            let parent_p = self.doc.parent(p).unwrap();
-            self.set_node_tag(parent_p, "div");
+        if let Some(parent_p) = self.doc.parent(p) {
+            if self.doc.tag_name(parent_p) == "p" {
+                self.set_node_tag(parent_p, "div");
+            }
         }
 
         let _ = br_parent; // used earlier for context
@@ -1345,7 +1341,8 @@ impl Parser {
                 if self.has_single_tag_inside_element(n, "div")
                     || self.has_single_tag_inside_element(n, "section")
                 {
-                    let child = self.doc.first_element_child(n).unwrap();
+                    let child = self.doc.first_element_child(n)
+                        .expect("has_single_tag_inside_element guarantees exactly one element child");
                     // Copy parent attrs to child.
                     let parent_attrs = self.doc.get_all_attrs(n);
                     for (k, v) in parent_attrs {
@@ -2450,15 +2447,15 @@ impl Parser {
                                             // Port of Go: p.NextSibling != nil &&
                                             // p.NextSibling.Type == html.ElementNode
                                             let next_sib = self.doc.next_sibling(p_id);
-                                            let next_is_elem = next_sib
-                                                .map(|n| self.doc.is_element(n))
-                                                .unwrap_or(false);
-                                            if next_is_elem {
-                                                // Detach from p and reinsert before next sibling.
-                                                self.doc.remove(l);
-                                                self.doc.insert_before(next_sib.unwrap(), l);
-                                            } else {
-                                                self.doc.remove(l);
+                                            match next_sib {
+                                                Some(ns) if self.doc.is_element(ns) => {
+                                                    // Detach from p and reinsert before next sibling.
+                                                    self.doc.remove(l);
+                                                    self.doc.insert_before(ns, l);
+                                                }
+                                                _ => {
+                                                    self.doc.remove(l);
+                                                }
                                             }
                                         }
                                         _ => break,
@@ -2618,7 +2615,7 @@ impl Parser {
                 self.initialize_node(new_div);
                 top_candidate = Some(new_div);
             } else {
-                let tc = top_candidate.unwrap();
+                let tc = top_candidate.expect("top_candidate set by scoring loop above");
                 let top_candidate_score = self.get_content_score(tc);
 
                 // Check for alternative ancestors shared by multiple top candidates.
@@ -2651,7 +2648,7 @@ impl Parser {
                     }
                 }
 
-                let tc = top_candidate.unwrap();
+                let tc = top_candidate.expect("top_candidate never reset to None");
                 if !self.has_content_score(tc) {
                     self.initialize_node(tc);
                 }
@@ -2681,7 +2678,7 @@ impl Parser {
                 }
 
                 // If top candidate is the only child, use parent.
-                let tc = top_candidate.unwrap();
+                let tc = top_candidate.expect("top_candidate never reset to None");
                 let mut parent_of_tc = self.doc.parent(tc);
                 while let Some(pot) = parent_of_tc {
                     if self.doc.tag_name(pot) == "body" {
@@ -2694,13 +2691,13 @@ impl Parser {
                     parent_of_tc = self.doc.parent(pot);
                 }
 
-                let tc = top_candidate.unwrap();
+                let tc = top_candidate.expect("top_candidate never reset to None");
                 if !self.has_content_score(tc) {
                     self.initialize_node(tc);
                 }
             }
 
-            let top_candidate = top_candidate.unwrap();
+            let top_candidate = top_candidate.expect("if-branch creates new_div, else-branch inherits from candidates list");
 
             // ── Sibling gathering ─────────────────────────────────────────
             let article_content = self.doc.create_element("div");
