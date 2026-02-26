@@ -19,6 +19,7 @@ pub struct Document {
     pub(crate) html: Html,
 }
 
+#[allow(dead_code)] // DOM utility layer — complete API surface used across modules and tests
 impl Document {
     /// Parse an HTML string into a Document.
     pub fn parse(html_str: &str) -> Self {

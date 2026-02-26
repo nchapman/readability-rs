@@ -17,7 +17,7 @@ use crate::utils::{
     char_count, is_valid_url, str_or, text_similarity, to_absolute_uri, word_count,
 };
 
-pub type Result<T = Article> = std::result::Result<T, Error>;
+pub(crate) type Result<T = Article> = std::result::Result<T, Error>;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -102,20 +102,21 @@ impl Default for Flags {
 /// Port of `Parser` — the core readability extraction engine.
 ///
 /// Create with `Parser::new()`, configure public fields as needed, then call
-/// `parse()` or `parse_document()` to extract an article.
+/// `parse()` to extract an article.
 ///
 /// A single `Parser` can be reused for multiple documents — internal state is
 /// fully reset at the start of each parse call. However, `Parser` is **not
 /// thread-safe**: it requires `&mut self` for parsing, so it cannot be shared
 /// across threads without external synchronization.
+#[non_exhaustive]
 pub struct Parser {
     // ── Public configuration ──────────────────────────────────────────────
     /// Max DOM nodes to process. 0 = unlimited. Port of `MaxElemsToParse`.
     pub max_elems_to_parse: usize,
     /// Number of top candidates to compare during scoring. Port of `NTopCandidates`.
     pub n_top_candidates: usize,
-    /// Minimum character count for accepted article content. Port of `CharThresholds`.
-    pub char_thresholds: usize,
+    /// Minimum character count for accepted article content. Port of `CharThreshold`.
+    pub char_threshold: usize,
     /// CSS class names to preserve when `keep_classes` is false. Port of `ClassesToPreserve`.
     pub classes_to_preserve: Vec<String>,
     /// If true, keep all class attributes. Port of `KeepClasses`.
@@ -148,7 +149,7 @@ impl Parser {
         Parser {
             max_elems_to_parse: 0,
             n_top_candidates: 5,
-            char_thresholds: 500,
+            char_threshold: 500,
             classes_to_preserve: vec!["page".to_string()],
             keep_classes: false,
             tags_to_score: vec![
@@ -196,7 +197,7 @@ impl Parser {
     /// Port of `CheckDocument` — returns true if the document is likely a readable article.
     ///
     /// Checks without running the full extraction pipeline.
-    pub fn check_document(&self, doc: &Document) -> bool {
+    pub(crate) fn check_document(&self, doc: &Document) -> bool {
         // Get <p>, <pre>, and <article> nodes.
         let root = doc.root();
         let mut nodes = doc.query_selector_all(root, "p, pre, article");
@@ -282,12 +283,13 @@ impl Parser {
     }
 
     /// Port of `ParseDocument` — parse a document (clones it to leave original untouched).
-    pub fn parse_document(&mut self, doc: &Document, page_url: Option<&Url>) -> Result {
+    #[allow(dead_code)] // mirrors Go API; kept for parity
+    pub(crate) fn parse_document(&mut self, doc: &Document, page_url: Option<&Url>) -> Result {
         self.parse_and_mutate(doc.clone(), page_url)
     }
 
     /// Port of `ParseAndMutate` — main entry point; mutates `doc` in place during parsing.
-    pub fn parse_and_mutate(&mut self, doc: Document, page_url: Option<&Url>) -> Result {
+    pub(crate) fn parse_and_mutate(&mut self, doc: Document, page_url: Option<&Url>) -> Result {
         // Reset per-parse state.
         self.doc = doc;
         self.document_uri = page_url.cloned();
@@ -2164,7 +2166,7 @@ impl Parser {
         self.clean(article_content, "aside");
 
         // Remove elements that have "share" in their class/id and are small.
-        let share_threshold = self.char_thresholds;
+        let share_threshold = self.char_threshold;
         self.remove_share_elements(article_content, share_threshold);
 
         self.clean(article_content, "iframe");
@@ -2797,7 +2799,7 @@ impl Parser {
             let (text_length, _) =
                 crate::traverse::count_chars_and_commas(&self.doc, article_content);
 
-            if text_length < self.char_thresholds {
+            if text_length < self.char_threshold {
                 let doc_snap = self.doc.clone();
                 self.attempts.push(ParseAttempt {
                     article_content,

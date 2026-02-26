@@ -1,9 +1,9 @@
 // Port of go-readability/readability.go
 
-pub mod article;
+pub(crate) mod article;
 pub(crate) mod dom;
-pub mod error;
-pub mod parser;
+pub(crate) mod error;
+pub(crate) mod parser;
 pub(crate) mod regexp;
 pub(crate) mod render;
 pub(crate) mod traverse;
