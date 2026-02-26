@@ -1,5 +1,8 @@
 # readability
 
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Rust: 1.80+](https://img.shields.io/badge/rust-1.80%2B-orange.svg)](https://www.rust-lang.org)
+
 Extract the main article content from web pages.
 
 A Rust port of [readability by readeck](https://codeberg.org/readeck/readability),
@@ -30,7 +33,7 @@ println!("HTML: {}", article.content);
 
 ## What it returns
 
-The [`Article`] struct contains:
+The `Article` struct contains:
 
 | Field | Description |
 |-------|-------------|
@@ -48,13 +51,31 @@ The [`Article`] struct contains:
 
 ## Configuration
 
+Configure via public fields or chainable builder methods:
+
 ```rust
 use readability::Parser;
 
+// Builder style
+let mut parser = Parser::new()
+    .char_threshold(200)
+    .keep_classes(true)
+    .disable_jsonld(true);
+
+// Or set fields directly
 let mut parser = Parser::new();
-parser.char_threshold = 200;       // minimum article length
-parser.keep_classes = true;        // preserve CSS classes
-parser.disable_jsonld = true;      // skip JSON-LD metadata
+parser.char_threshold = 200;
+parser.keep_classes = true;
+```
+
+## Optional features
+
+| Feature | Description |
+|---------|-------------|
+| `tracing` | Enable debug/trace logging at key algorithm points (zero-cost when disabled) |
+
+```toml
+readability = { version = "0.1", features = ["tracing"] }
 ```
 
 ## License

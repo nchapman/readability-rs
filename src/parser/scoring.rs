@@ -17,10 +17,14 @@ impl Parser {
         // Save a pristine snapshot to restore at the start of each pass.
         let base_doc = self.doc.clone();
 
+        #[cfg(feature = "tracing")]
         let mut pass_num: u32 = 0;
 
         loop {
-            pass_num += 1;
+            #[cfg(feature = "tracing")]
+            {
+                pass_num += 1;
+            }
             // Restore the document to a clean state for this pass.
             self.doc = base_doc.clone();
             self.score_map.clear();

@@ -5,6 +5,10 @@ edition = "2021"
 description = "Rust port of go-readability — extract readable content from HTML"
 license = "Apache-2.0"
 rust-version = "1.80"
+readme = "README.md"
+repository = "https://github.com/nichochar/readability-rs"
+keywords = ["readability", "html", "extraction", "article", "scraping"]
+categories = ["parser-implementations", "text-processing", "web-programming"]
 
 [lib]
 name = "readability"
