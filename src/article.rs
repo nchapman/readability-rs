@@ -28,4 +28,7 @@ pub struct Article {
     pub length: usize,
     /// Direction: "ltr", "rtl", or "".
     pub dir: String,
+    /// The article content as a standalone DOM tree. Populated only by `parse_tree`.
+    /// Contains just the extracted article subtree (not the full document).
+    pub node: Option<ego_tree::Tree<scraper::Node>>,
 }

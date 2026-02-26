@@ -136,6 +136,8 @@ pub struct Parser {
     article_dir: String,
     article_lang: String,
     flags: Flags,
+    /// NodeId of the article content root (set by parse_and_mutate for parse_tree).
+    article_node_id: Option<NodeId>,
 
     // ── Per-pass side tables (reset at start of each grab_article pass) ──
     score_map: HashMap<NodeId, f64>,
@@ -172,6 +174,7 @@ impl Parser {
             article_dir: String::new(),
             article_lang: String::new(),
             flags: Flags::default(),
+            article_node_id: None,
             score_map: HashMap::new(),
             data_tables: HashSet::new(),
             attempts: Vec::new(),
@@ -184,6 +187,26 @@ impl Parser {
     pub fn parse(&mut self, html: &str, page_url: Option<&Url>) -> Result {
         let doc = Document::parse(html);
         self.parse_and_mutate(doc, page_url)
+    }
+
+    /// Parse from a pre-built ego-tree, avoiding HTML re-parsing.
+    ///
+    /// Returns an Article with the `node` field populated containing the article
+    /// content subtree wrapped in a `Document → html → body` envelope. The
+    /// `content` and `text_content` fields are still populated for API completeness;
+    /// callers using the tree path can ignore those fields.
+    pub fn parse_tree(
+        &mut self,
+        tree: ego_tree::Tree<scraper::Node>,
+        page_url: Option<&Url>,
+    ) -> Result {
+        let doc = Document::from_tree(tree);
+        let mut article = self.parse_and_mutate(doc, page_url)?;
+        // article_node_id is set inside parse_and_mutate when grab_article succeeds.
+        if let Some(node_id) = self.article_node_id {
+            article.node = Some(self.doc.clone_subtree(node_id));
+        }
+        Ok(article)
     }
 
     /// Convenience wrapper: parse `html` and check readability without a pre-parsed Document.
@@ -298,6 +321,7 @@ impl Parser {
         self.article_dir = String::new();
         self.article_lang = String::new();
         self.flags = Flags::default();
+        self.article_node_id = None;
         self.score_map.clear();
         self.data_tables.clear();
         self.attempts.clear();
@@ -343,6 +367,7 @@ impl Parser {
                 .doc
                 .first_element_child(content_id)
                 .unwrap_or(content_id);
+            self.article_node_id = Some(readable);
             let content_html = self.doc.outer_html(readable);
             let text = inner_text(&self.doc, readable);
             let len = char_count(&text);
@@ -398,6 +423,7 @@ impl Parser {
             text_content,
             length,
             dir,
+            node: None,
         })
     }
 
