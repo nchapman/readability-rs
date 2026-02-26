@@ -419,51 +419,49 @@ mod tests {
         assert!(s.contains("first") && s.contains("second"), "got: {s:?}");
     }
 
-    // ── Ports of Go's TestInnerText table-driven cases ────────────────────────
-
     #[test]
-    fn go_mixed() {
+    fn mixed() {
         let html = "<p><span>Hi there!<p><img/>How have you been?\n<ul><li>pretty good</li><li>not bad</li><li>meh</li>\n<p><span>Inline</span><span>No</span><span>Spaces</span><div>Fin\n<table><tr><th>header 1</th><th>header 2</th></tr><tr><td>cell 1</td><td>cell 2</td></tr></table>\n<div>\n\t<div>\n\t\t<div>\n\t\t\t<div>\n\t\t\t\tDeeply nested\n\t\t\t</div>\n\t\t</div>\n\t</div>\n</div>";
         let expected = "Hi there!\n\nHow have you been?\n\npretty good\nnot bad\nmeh\n\nInlineNoSpaces\nFin\n\nheader 1\theader 2\ncell 1\tcell 2\nDeeply nested";
         assert_eq!(render_body(html), expected);
     }
 
     #[test]
-    fn go_no_break_space() {
+    fn no_break_space() {
         let html = r#"<div> <p> open&nbsp;source software </p> </div>"#;
         assert_eq!(render_body(html), "open\u{00a0}source software");
     }
 
     #[test]
-    fn go_br_element() {
+    fn br_element() {
         // Three consecutive <br> tags produce three newlines between "line" and "breaks".
         let html = "<p>hard<br>line<br><br><br>breaks</p>";
         assert_eq!(render_body(html), "hard\nline\n\n\nbreaks");
     }
 
     #[test]
-    fn go_pre_element() {
+    fn pre_element() {
         let html = "<div>\n\t<p> Example code: </p>\n\t<pre><code>def normalize(s: str) -&gt; str:\n    <span class=\"comment\"># remove all U+00AD (SOFT HYPHEN)</span>\n    return s.<span class=\"fn\">replace</span>('\\u00ad', '')\n</code></pre>\n</div>";
         let expected = "Example code:\n\ndef normalize(s: str) -> str:\n    # remove all U+00AD (SOFT HYPHEN)\n    return s.replace('\\u00ad', '')\n";
         assert_eq!(render_body(html), expected);
     }
 
     #[test]
-    fn go_headings() {
+    fn headings() {
         let html = "<h1>HEADING 1</h1>\n\t<p>First paragraph</p>\n\t<h2>HEADING 2</h2>\n\t<p>Second paragraph</p>\n";
         let expected = "HEADING 1\n\nFirst paragraph\n\nHEADING 2\n\nSecond paragraph";
         assert_eq!(render_body(html), expected);
     }
 
     #[test]
-    fn go_multibyte() {
+    fn multibyte() {
         let html = "<p align=\"center\">\n\t<a href=\"../../../index.html\">福娘童話集</a> &gt; <a href=\"../index.html\">きょうのイソップ童話</a> &gt; <a href=\"../itiran/01gatu.htm\">１月のイソップ童話</a> &gt; 欲張りなイヌ\n</p>";
         let expected = "福娘童話集 > きょうのイソップ童話 > １月のイソップ童話 > 欲張りなイヌ";
         assert_eq!(render_body(html), expected);
     }
 
     #[test]
-    fn go_katex_block() {
+    fn katex_block() {
         // KaTeX block: <math display="block"> with <annotation encoding="application/x-tex">
         let html = r#"Proof: <span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><annotation encoding="application/x-tex">
 \begin {array}{lcl}
@@ -479,14 +477,14 @@ mod tests {
     }
 
     #[test]
-    fn go_katex_inline() {
+    fn katex_inline() {
         // KaTeX inline: <math> without display="block", wrapped in $...$
         let html = r#"Proof: <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><annotation encoding="application/x-tex">boom</annotation></math></span></span> (mic drop)"#;
         assert_eq!(render_body(html), "Proof: $boom$ (mic drop)");
     }
 
     #[test]
-    fn go_mathjax27_block() {
+    fn mathjax27_block() {
         // MathJax 2.7: <script type="math/tex; mode=display"> produces block LaTeX.
         // Note: html5ever moves <script> from <p> into <body> during parsing.
         let html = r#"Spectral reversal<p><script type="math/tex; mode=display">x[n]e^{i2\pi ns/N}\longleftrightarrow X[k-s].</script></p>Fin"#;
@@ -501,7 +499,7 @@ mod tests {
     }
 
     #[test]
-    fn go_mathjax4_chtml_block() {
+    fn mathjax4_chtml_block() {
         // MathJax 4 CHTML: <mjx-container display="true"> finds data-latex on child.
         let html = r#"<h4>Curl of a Vector Field</h4><mjx-container class="MathJax" jax="CHTML" display="true"><mjx-math data-latex=" \nabla \times F = \mathbf{k} "></mjx-math><mjx-speech aria-label="math" role="img" aria-roledescription=""></mjx-speech></mjx-container>"#;
         let s = render_body(html);
@@ -511,7 +509,7 @@ mod tests {
     }
 
     #[test]
-    fn go_mathjax4_svg_block() {
+    fn mathjax4_svg_block() {
         // MathJax 4 SVG: <mjx-container display="true"> finds data-latex inside <svg> <g>.
         let html = r#"BEGIN <mjx-container class="MathJax" jax="SVG" display="true"><svg xmlns="http://www.w3.org/2000/svg"><g data-mml-node="math" data-latex=" \cos(\theta) "></g></svg><mjx-speech aria-label="math" role="img" aria-roledescription=""></mjx-speech></mjx-container> END"#;
         let s = render_body(html);
