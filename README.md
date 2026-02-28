@@ -80,6 +80,28 @@ parser.keep_classes = true;
 libreadability = { version = "0.1", features = ["tracing"] }
 ```
 
+## Benchmarks
+
+Rust vs Go ([readeck/readability](https://codeberg.org/readeck/readability)) on representative pages:
+
+| Page | Go | Rust | Speedup |
+|------|---:|-----:|--------:|
+| ars-1 (~56 KB) | 1.85 ms | 854 µs | 2.2x |
+| wapo-1 (~180 KB) | 10.1 ms | 2.46 ms | 4.1x |
+| wikipedia (~244 KB) | 18.3 ms | 6.79 ms | 2.7x |
+| nytimes-3 (~489 KB) | 19.5 ms | 3.35 ms | 5.8x |
+| yahoo-2 (~1.6 MB) | 35.8 ms | 7.11 ms | 5.0x |
+| **all 133 fixtures** | **670 ms** | **320 ms** | **2.1x** |
+
+Measured on Apple M4 Max, Rust 1.93, Go 1.25, macOS 15.7.
+
+Reproduce:
+
+```sh
+cargo bench                  # Criterion benchmarks
+./benches/compare.sh         # Rust vs Go comparison table
+```
+
 ## License
 
 MIT
