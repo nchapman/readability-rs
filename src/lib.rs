@@ -86,10 +86,9 @@ pub use parser::Parser;
 /// ```
 pub fn extract(html: &str, url: Option<&str>) -> Result<Article, Error> {
     let page_url = match url {
-        Some(u) => Some(
-            url::Url::parse(u)
-                .map_err(|e| Error::Parse(format!("invalid URL '{u}': {e}")))?,
-        ),
+        Some(u) => {
+            Some(url::Url::parse(u).map_err(|e| Error::Parse(format!("invalid URL '{u}': {e}")))?)
+        }
         None => None,
     };
     Parser::new().parse(html, page_url.as_ref())
