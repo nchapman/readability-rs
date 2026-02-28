@@ -75,6 +75,12 @@ pub use parser::Parser;
 /// `"https://example.com/article"`). Pass `None` if the HTML is self-contained
 /// or you don't need absolute URLs.
 ///
+/// # Errors
+///
+/// Returns [`Error::Parse`] if `url` is not a valid absolute URL, or if the
+/// HTML cannot be parsed into a readable article. Returns [`Error::NoContent`]
+/// or [`Error::NotReadable`] if no article content is found.
+///
 /// # Example
 ///
 /// ```rust
