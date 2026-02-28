@@ -85,6 +85,44 @@ parser.keep_classes = true;
 libreadability = { version = "0.2", features = ["tracing"] }
 ```
 
+## Language bindings
+
+Python, Swift, and Kotlin bindings are available via [UniFFI](https://mozilla.github.io/uniffi-rs/).
+
+```sh
+make test-bindings   # run all binding test suites
+make test-python     # Python only (pytest)
+make test-swift      # Swift only (XCTest)
+make test-kotlin     # Kotlin only (JUnit 5)
+```
+
+### Python
+
+```python
+from readability_uniffi import extract
+
+article = extract("<html><body><article>...</article></body></html>", None)
+print(article.title, article.text_content)
+```
+
+### Swift
+
+```swift
+import Readability
+
+let article = try extract(html: html, url: nil)
+print(article.title, article.textContent)
+```
+
+### Kotlin
+
+```kotlin
+import uniffi.readability_uniffi.*
+
+val article = extract(html, null)
+println("${article.title} ${article.textContent}")
+```
+
 ## Benchmarks
 
 Rust vs Go ([readeck/readability](https://codeberg.org/readeck/readability)) on representative pages:
