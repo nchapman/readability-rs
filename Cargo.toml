@@ -9,6 +9,7 @@ readme = "README.md"
 repository = "https://github.com/nchapman/readability-rs"
 keywords = ["readability", "html", "extraction", "article", "scraping"]
 categories = ["parser-implementations", "text-processing", "web-programming"]
+exclude = ["test-pages/", "benches/"]
 
 [lib]
 name = "libreadability"
