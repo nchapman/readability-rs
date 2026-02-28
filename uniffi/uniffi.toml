@@ -1,0 +1,8 @@
+[bindings.kotlin]
+package_name = "uniffi.readability_uniffi"
+cdylib_name  = "readability_uniffi"
+
+[bindings.swift]
+module_name  = "Readability"
+ffi_module_name = "readability_uniffiFFI"
+cdylib_name  = "readability_uniffi"

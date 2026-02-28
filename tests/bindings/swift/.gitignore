@@ -1,0 +1,4 @@
+.build/
+generated/
+Sources/readability_uniffiFFI/readability_uniffiFFI.h
+Sources/Readability/readability_uniffi.swift
