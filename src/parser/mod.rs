@@ -225,10 +225,7 @@ impl Parser {
     }
 
     /// Set tag names eligible for content scoring.
-    pub fn with_tags_to_score(
-        mut self,
-        tags: impl IntoIterator<Item = impl Into<String>>,
-    ) -> Self {
+    pub fn with_tags_to_score(mut self, tags: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.tags_to_score = tags.into_iter().map(Into::into).collect();
         self
     }

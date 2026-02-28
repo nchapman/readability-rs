@@ -277,7 +277,6 @@ impl Parser {
         metadata.unwrap_or_default()
     }
 
-
     /// Port of `getArticleFavicon` — find the best PNG favicon from `<link>` elements.
     pub(super) fn get_article_favicon(&self) -> String {
         let root = self.doc.root();
@@ -443,11 +442,8 @@ impl Parser {
         .to_string();
 
         // Go's getJSONLD never extracts dateModified, so no JSON-LD fallback here.
-        let metadata_modified_time = str_or(&[
-            v("article:modified_time"),
-            v("dcterms.modified"),
-        ])
-        .to_string();
+        let metadata_modified_time =
+            str_or(&[v("article:modified_time"), v("dcterms.modified")]).to_string();
 
         ArticleMetadata {
             title: html_unescape(&metadata_title),
