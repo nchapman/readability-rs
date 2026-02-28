@@ -15,7 +15,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-libreadability = "0.1"
+libreadability = "0.2"
 ```
 
 ```rust
@@ -82,7 +82,7 @@ parser.keep_classes = true;
 | `tracing` | Enable debug/trace logging at key algorithm points (zero-cost when disabled) |
 
 ```toml
-libreadability = { version = "0.1", features = ["tracing"] }
+libreadability = { version = "0.2", features = ["tracing"] }
 ```
 
 ## Benchmarks
