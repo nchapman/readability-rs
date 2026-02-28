@@ -19,15 +19,20 @@ libreadability = "0.1"
 ```
 
 ```rust
-use libreadability::Parser;
+use libreadability::extract;
 
-let html = include_str!("article.html");
+let html = r#"<html><body>
+  <article>
+    <h1>Breaking News</h1>
+    <p>This is the main article body with enough text to be extracted.</p>
+    <p>The readability algorithm scores content density and identifies the
+    primary article content, stripping navigation, ads, and other boilerplate.</p>
+  </article>
+</body></html>"#;
 
-let mut parser = Parser::new();
-let article = parser.parse(html, None).unwrap();
+let article = extract(html, None).unwrap();
 
 println!("Title: {}", article.title);
-println!("Author: {}", article.byline);
 println!("Text: {}", article.text_content);
 println!("HTML: {}", article.content);
 ```
