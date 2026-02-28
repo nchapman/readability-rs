@@ -40,7 +40,7 @@ class ReadabilityTest {
         @Test fun `empty body returns empty article`() {
             val article = extract("<html><body></body></html>", null)
             assertEquals("", article.textContent)
-            assertEquals(0.toULong(), article.length)
+            assertEquals(0L, article.length)
         }
 
         @Test fun `with url`() {
@@ -64,7 +64,7 @@ class ReadabilityTest {
         }
 
         @Test fun `custom config`() {
-            val config = defaultParserConfig().copy(charThreshold = 10.toULong())
+            val config = defaultParserConfig().copy(charThreshold = 10L)
             val article = extractWith(articleHtml, null, config)
             assertTrue(article.textContent.isNotEmpty())
         }
@@ -77,7 +77,7 @@ class ReadabilityTest {
             assertEquals("Test Article", article.title)
             assertTrue(article.content.isNotEmpty())
             assertTrue(article.textContent.isNotEmpty())
-            assertTrue(article.length > 0.toULong())
+            assertTrue(article.length > 0L)
         }
     }
 
@@ -96,9 +96,9 @@ class ReadabilityTest {
 
         @Test fun `default config values`() {
             val config = defaultParserConfig()
-            assertEquals(0.toULong(), config.maxElemsToParse)
-            assertEquals(5.toULong(), config.nTopCandidates)
-            assertEquals(500.toULong(), config.charThreshold)
+            assertEquals(0L, config.maxElemsToParse)
+            assertEquals(5L, config.nTopCandidates)
+            assertEquals(500L, config.charThreshold)
             assertEquals(listOf("page"), config.classesToPreserve)
             assertFalse(config.keepClasses)
             assertTrue(config.tagsToScore.contains("p"))

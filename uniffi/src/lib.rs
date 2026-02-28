@@ -42,7 +42,7 @@ pub struct Article {
     /// Plain text via InnerText algorithm.
     pub text_content: String,
     /// Character count of text_content.
-    pub length: u64,
+    pub length: i64,
     /// Text direction: "ltr", "rtl", or "".
     pub dir: String,
 }
@@ -51,11 +51,11 @@ pub struct Article {
 #[derive(uniffi::Record)]
 pub struct ParserConfig {
     /// Max DOM nodes to process. 0 = unlimited.
-    pub max_elems_to_parse: u64,
+    pub max_elems_to_parse: i64,
     /// Number of top candidates to compare during scoring.
-    pub n_top_candidates: u64,
+    pub n_top_candidates: i64,
     /// Minimum character count for accepted article content.
-    pub char_threshold: u64,
+    pub char_threshold: i64,
     /// CSS class names to preserve.
     pub classes_to_preserve: Vec<String>,
     /// If true, keep all class attributes.
@@ -71,9 +71,9 @@ pub struct ParserConfig {
 pub fn default_parser_config() -> ParserConfig {
     let p = libreadability::Parser::new();
     ParserConfig {
-        max_elems_to_parse: p.max_elems_to_parse as u64,
-        n_top_candidates: p.n_top_candidates as u64,
-        char_threshold: p.char_threshold as u64,
+        max_elems_to_parse: p.max_elems_to_parse as i64,
+        n_top_candidates: p.n_top_candidates as i64,
+        char_threshold: p.char_threshold as i64,
         classes_to_preserve: p.classes_to_preserve,
         keep_classes: p.keep_classes,
         tags_to_score: p.tags_to_score,
@@ -132,17 +132,16 @@ fn to_ffi_article(a: libreadability::Article) -> Article {
         modified_time: a.modified_time,
         content: a.content,
         text_content: a.text_content,
-        length: a.length as u64,
+        length: a.length as i64,
         dir: a.dir,
     }
 }
 
 fn to_core_parser(c: &ParserConfig) -> libreadability::Parser {
-    let cap = usize::MAX as u64;
     libreadability::Parser::new()
-        .with_max_elems_to_parse(c.max_elems_to_parse.min(cap) as usize)
-        .with_n_top_candidates(c.n_top_candidates.min(cap) as usize)
-        .with_char_threshold(c.char_threshold.min(cap) as usize)
+        .with_max_elems_to_parse(c.max_elems_to_parse.max(0) as usize)
+        .with_n_top_candidates(c.n_top_candidates.max(0) as usize)
+        .with_char_threshold(c.char_threshold.max(0) as usize)
         .with_classes_to_preserve(c.classes_to_preserve.clone())
         .with_keep_classes(c.keep_classes)
         .with_tags_to_score(c.tags_to_score.clone())
