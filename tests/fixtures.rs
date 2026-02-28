@@ -274,7 +274,7 @@ fn run_fixture(name: &str) {
 
     let page_url = Url::parse("http://fakehost/test/page.html").unwrap();
 
-    let mut parser = readability::Parser::new();
+    let mut parser = libreadability::Parser::new();
 
     // Check readability before parsing (mirrors Go: CheckDocument then ParseAndMutate).
     let is_readerable = parser.check_html(&source);

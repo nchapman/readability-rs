@@ -5,7 +5,7 @@
 //   - Full fixture suite throughput (all 133 test pages, one parse each)
 
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion, Throughput};
-use readability::Parser;
+use libreadability::Parser;
 use url::Url;
 
 // ── per-page helpers ──────────────────────────────────────────────────────────

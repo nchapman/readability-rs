@@ -1,6 +1,7 @@
-# readability
+# libreadability
 
-[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Crates.io](https://img.shields.io/crates/v/libreadability.svg)](https://crates.io/crates/libreadability)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust: 1.80+](https://img.shields.io/badge/rust-1.80%2B-orange.svg)](https://www.rust-lang.org)
 
 Extract the main article content from web pages.
@@ -14,11 +15,11 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-readability = "0.1"
+libreadability = "0.1"
 ```
 
 ```rust
-use readability::Parser;
+use libreadability::Parser;
 
 let html = include_str!("article.html");
 
@@ -55,7 +56,7 @@ The `Article` struct contains:
 Configure via public fields or chainable builder methods:
 
 ```rust
-use readability::Parser;
+use libreadability::Parser;
 
 // Builder style
 let mut parser = Parser::new()
@@ -76,9 +77,9 @@ parser.keep_classes = true;
 | `tracing` | Enable debug/trace logging at key algorithm points (zero-cost when disabled) |
 
 ```toml
-readability = { version = "0.1", features = ["tracing"] }
+libreadability = { version = "0.1", features = ["tracing"] }
 ```
 
 ## License
 
-Apache-2.0
+MIT

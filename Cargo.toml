@@ -1,26 +1,26 @@
 [package]
-name = "readability"
+name = "libreadability"
 version = "0.1.0"
 edition = "2021"
 description = "Rust port of go-readability — extract readable content from HTML"
-license = "Apache-2.0"
+license = "MIT"
 rust-version = "1.80"
 readme = "README.md"
-repository = "https://github.com/nichochar/readability-rs"
+repository = "https://github.com/nchapman/readability-rs"
 keywords = ["readability", "html", "extraction", "article", "scraping"]
 categories = ["parser-implementations", "text-processing", "web-programming"]
 
 [lib]
-name = "readability"
+name = "libreadability"
 
 [dependencies]
 # HTML parsing + CSS selectors (html5ever-based, spec-compliant)
-scraper = "0.22"
+scraper = "0.25"
 ego-tree = "0.10"
 
 # HTML/DOM internals (QualName, LocalName, StrTendril — used in DOM mutation)
-html5ever = "0.29"
-markup5ever = "0.14"
+html5ever = "0.36"
+markup5ever = "0.36"
 
 # Regex (RE2-compatible, linear time — same engine family as go-readability's re2go patterns)
 regex = "1"
@@ -48,7 +48,7 @@ tracing = ["dep:tracing"]
 
 [dev-dependencies]
 pretty_assertions = "1"
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { version = "0.8", features = ["html_reports"] }
 
 [[bench]]
 name = "extraction"

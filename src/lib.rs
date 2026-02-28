@@ -2,7 +2,7 @@
 
 //! Readability article extraction library.
 //!
-//! `readability` extracts the main article content from web pages by analyzing
+//! `libreadability` extracts the main article content from web pages by analyzing
 //! DOM structure, scoring content density, and removing boilerplate. It is a
 //! Rust port of [readability by readeck](https://codeberg.org/readeck/readability),
 //! itself a Go port of Mozilla's Readability.js.
@@ -10,7 +10,7 @@
 //! # Quick start
 //!
 //! ```rust
-//! use readability::Parser;
+//! use libreadability::Parser;
 //!
 //! let html = r#"<html><body>
 //!   <nav>Navigation links</nav>

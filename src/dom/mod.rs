@@ -5,7 +5,7 @@
 
 use ego_tree::NodeId;
 use html5ever::Attribute;
-use markup5ever::{namespace_url, ns, LocalName, QualName};
+use markup5ever::{ns, LocalName, QualName};
 use scraper::{ElementRef, Html, Node, Selector};
 
 use crate::regexp::{RX_DISPLAY_NONE, RX_VISIBILITY_HIDDEN};
