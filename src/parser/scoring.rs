@@ -130,11 +130,11 @@ impl Parser {
 
                 // Remove empty structural elements.
                 match tag.as_str() {
-                    "div" | "section" | "header" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
-                        if self.is_element_without_content(n) {
-                            node = self.remove_and_get_next(n);
-                            continue;
-                        }
+                    "div" | "section" | "header" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6"
+                        if self.is_element_without_content(n) =>
+                    {
+                        node = self.remove_and_get_next(n);
+                        continue;
                     }
                     _ => {}
                 }
@@ -568,7 +568,7 @@ impl Parser {
                 } else {
                     // All flags exhausted — use the attempt with the most text.
                     self.attempts
-                        .sort_by(|a, b| b.text_length.cmp(&a.text_length));
+                        .sort_by_key(|a| std::cmp::Reverse(a.text_length));
                     if self.attempts[0].text_length == 0 {
                         return None;
                     }
