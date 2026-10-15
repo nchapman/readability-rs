@@ -130,15 +130,11 @@ impl Parser {
         // Walk up until we find a parent with a next sibling.
         let mut cur = id;
         loop {
-            match self.doc.parent(cur) {
-                None => return None,
-                Some(p) => {
-                    if let Some(sibling) = self.doc.next_element_sibling(p) {
-                        return Some(sibling);
-                    }
-                    cur = p;
-                }
+            let p = self.doc.parent(cur)?;
+            if let Some(sibling) = self.doc.next_element_sibling(p) {
+                return Some(sibling);
             }
+            cur = p;
         }
     }
 
@@ -667,10 +663,8 @@ pub(super) fn find_content_in_node(doc: &Document, id: NodeId) -> bool {
             "img" | "picture" | "embed" | "object" | "iframe" => return true,
             _ => {}
         },
-        Node::Text(_) => {
-            if has_text_content(doc, id) {
-                return true;
-            }
+        Node::Text(_) if has_text_content(doc, id) => {
+            return true;
         }
         _ => {}
     }
